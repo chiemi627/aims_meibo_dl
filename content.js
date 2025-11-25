@@ -199,6 +199,46 @@
   
   // ボタンをページに追加
   document.body.appendChild(sortButton);
+
+  // ------------------
+  // Helper: filename sanitize and download helpers
+  function sanitizeForFilename(name, maxLen = 120) {
+    if (!name) return 'download';
+    return String(name).replace(/[\\/\:\*\?"<>\|]/g, '_').slice(0, maxLen);
+  }
+
+  function downloadBlob(blob, filename) {
+    try {
+      const safe = sanitizeForFilename(filename);
+      // duplicate guard
+      if (typeof downloadedSet !== 'undefined' && downloadedSet.has(safe)) {
+        console.log('downloadBlob: skip already-downloaded file', safe);
+        return false;
+      }
+      if (typeof downloadedSet !== 'undefined') downloadedSet.add(safe);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = safe;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      return true;
+    } catch (e) {
+      console.error('downloadBlob failed', e);
+    }
+  }
+
+  function downloadTextAsFile(text, filename, mime = 'text/csv;charset=utf-8;') {
+    const blob = new Blob([text], { type: mime });
+    return downloadBlob(blob, filename);
+  }
+
+  // sentinel returned when fetchCsvFromGroup already triggered a blob download
+  const BLOB_DOWNLOADED = '__BLOB_DOWNLOADED__';
+  // set to track filenames already downloaded in this session
+  const downloadedSet = new Set();
   
   // 全ページ取得ボタンを作成
   const fetchAllButton = document.createElement('button');
@@ -600,17 +640,17 @@
     const classCode = getClassCodeFromGroup(groupRows) || 'unknown';
     try {
       const respText = await fetchCsvFromGroup(groupRows);
-      if (respText && respText.trim().length > 0) {
+      if (respText === BLOB_DOWNLOADED) {
+        console.log('downloadGroup: fetchCsvFromGroup は既に Blob をダウンロードしました、二重ダウンロードを回避します');
+        return;
+      }
+        if (respText && respText.trim().length > 0) {
         const filename = `${safeSubject}_${classCode}.csv`;
-        const blob = new Blob([respText], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+        const wrote = downloadTextAsFile(respText, filename);
+        if (wrote === false) {
+          console.log('downloadGroup: ファイルは既にダウンロード済み。フォールバックをスキップします', filename);
+          return;
+        }
         return;
       }
 
@@ -640,6 +680,8 @@
       }
       if (handled) await new Promise(res => setTimeout(res, 800));
     } catch (err) {
+      console.error('個別グループの取得中に例外が発生しました', err);
+      // エラーは呼び出し元に伝える
       throw err;
     }
   }
@@ -677,6 +719,12 @@
       try {
         // まず fetch を試みてテキストを取得できるか確認する
         const respText = await fetchCsvFromGroup(groupRows);
+        if (respText === BLOB_DOWNLOADED) {
+          console.log('handleSubjectDownload: fetchCsvFromGroup は Blob をダウンロードしました（スキップ）');
+          // 既にダウンロード済みなので次のグループへ
+          await new Promise(res => setTimeout(res, 300));
+          continue;
+        }
         // main 行から科目コードを取得
         const mainCells = groupRows.find(r => r.querySelectorAll('td').length >= 3).querySelectorAll('td');
         const classCode = (mainCells && mainCells[0] && mainCells[0].textContent.trim()) || (`${g+1}`);
@@ -685,17 +733,13 @@
         if (respText && respText.trim().length > 0) {
           // テキストとして取得できた -> 個別ファイルを作ってダウンロード
           const filename = `${safeSubject}_${classCode}.csv`;
-          const blob = new Blob([respText], { type: 'text/csv;charset=utf-8;' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(url);
+          const wrote = downloadTextAsFile(respText, filename);
           // 少し待つ
           await new Promise(res => setTimeout(res, 300));
+          if (wrote === false) {
+            console.log('handleSubjectDownload: ファイルは既にダウンロード済み。次へ', filename);
+            continue;
+          }
           continue;
         }
 
@@ -803,7 +847,8 @@
             } catch (probeErr) {
               // probe が失敗しても続行して保存を試みる
             }
-            await downloadResponseBlob(resp, subjectFilenameSafe(groupRows));
+            const dres = await downloadResponseBlob(resp, subjectFilenameSafe(groupRows)).catch(_=>null);
+            if (dres === BLOB_DOWNLOADED) return BLOB_DOWNLOADED;
           } catch(_){ }
           return '';
             }
@@ -922,6 +967,8 @@
       return await responseToText(respForText);
     } catch (e) {
       try { await downloadResponseBlob(resp, 'postback'); } catch(_){}
+      const res = await downloadResponseBlob(resp, 'postback');
+      if (res === BLOB_DOWNLOADED) return BLOB_DOWNLOADED;
       return '';
     }
   }
@@ -990,7 +1037,8 @@
           console.log('postBackFetch: PDF 応答を検出したため自動保存をスキップします', ctype);
           return '';
         }
-        try { await downloadResponseBlob(resp, fallback); } catch(err) { console.error('postBackFetch: downloadResponseBlob で失敗しました', err); }
+  const res = await downloadResponseBlob(resp, fallback).catch(err => { console.error('postBackFetch: downloadResponseBlob で失敗しました', err); return null; });
+  if (res === BLOB_DOWNLOADED) return BLOB_DOWNLOADED;
       } catch (e2) {
         console.warn('postBackFetch: probe 取得失敗', e2);
       }
@@ -1127,16 +1175,11 @@
         const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^;"\n]+)"?/i);
         if (m) filename = decodeURIComponent(m[1]);
       }
-      // ensure safe
-      filename = filename.replace(/[\\/\:\*\?"<>\|]/g, '_').slice(0, 120);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+  // ensure safe and use helper
+  const safeName = sanitizeForFilename(filename);
+  downloadBlob(blob, safeName);
+  // indicate to caller that we performed a blob download (so they can avoid other fallbacks)
+  return BLOB_DOWNLOADED;
     } catch (e) {
       console.error('Blob のダウンロードに失敗しました', e);
     }
