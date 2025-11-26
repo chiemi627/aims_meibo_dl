@@ -5,9 +5,12 @@
   "description": "授業科目一覧のソート、全ページ取得、科目別CSVダウンロード機能",
   "content_scripts": [
     {
-      "matches": ["https://aims.ad.tsukuba-tech.ac.jp/aa_web/meiboDownload/jm0010.aspx*"],
+      "matches": [
+        "https://aims.ad.tsukuba-tech.ac.jp/aa_web/meiboDownload/*.aspx*"
+      ],
       "js": ["content.js"],
-      "run_at": "document_end"
+      "run_at": "document_end",
+      "all_frames": true
     }
   ],
   "permissions": []
