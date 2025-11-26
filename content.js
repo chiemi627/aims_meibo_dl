@@ -372,6 +372,21 @@
 
       btnContainer.appendChild(downloadBtn);
 
+      // 🆕 出欠テンプレートボタン
+      const attendanceBtn = document.createElement('button');
+      attendanceBtn.textContent = '出欠テンプレート';
+      attendanceBtn.style.fontSize = '12px';
+      attendanceBtn.style.padding = '4px 10px';
+      attendanceBtn.style.background = '#2196F3';
+      attendanceBtn.style.color = 'white';
+      attendanceBtn.style.border = 'none';
+      attendanceBtn.style.borderRadius = '3px';
+      attendanceBtn.style.cursor = 'pointer';
+      attendanceBtn.style.whiteSpace = 'nowrap';
+      attendanceBtn.onclick = () => handleAttendanceTemplate(subject, groupsForSubject, attendanceBtn);
+
+      btnContainer.appendChild(attendanceBtn);
+
       wrapper.appendChild(label);
       wrapper.appendChild(btnContainer);
       subjectListContainer.appendChild(wrapper);
@@ -399,13 +414,21 @@
   // 旧: 科目 -> 結合ボタン参照は不要になった（結合ボタン削除）
 
   // ダウンロード完了後に結合操作を促すオーバーレイを表示
-  function showAutoMergePrompt(subject) {
+  function showAutoMergePrompt(subject, isAttendanceMode = false) {
     try {
       // 既に表示中なら再利用
       const existing = document.getElementById('auto-merge-overlay');
       if (existing) {
         existing.querySelector('.auto-merge-subject').textContent = subject;
         existing.style.display = 'flex';
+        // モードに応じてボタンを更新
+        const pickBtn = existing.querySelector('.auto-merge-pick-btn');
+        if (pickBtn) {
+          pickBtn.onclick = () => {
+            existing.style.display = 'none';
+            mergeDownloadedFiles(subject, null, isAttendanceMode);
+          };
+        }
         return;
       }
       const overlay = document.createElement('div');
@@ -460,6 +483,7 @@
       cancelBtn.onclick = () => { overlay.style.display = 'none'; };
 
       const pickBtn = document.createElement('button');
+      pickBtn.className = 'auto-merge-pick-btn';
       pickBtn.textContent = 'ファイル選択して結合';
       pickBtn.style.padding = '6px 14px';
       pickBtn.style.background = '#9C27B0';
@@ -470,7 +494,7 @@
       pickBtn.onclick = () => {
         overlay.style.display = 'none';
         // 結合ボタンは削除したため triggerBtn を null で呼び出す
-        mergeDownloadedFiles(subject, null);
+        mergeDownloadedFiles(subject, null, isAttendanceMode);
       };
 
       actions.appendChild(cancelBtn);
@@ -481,14 +505,14 @@
       panel.appendChild(actions);
       overlay.appendChild(panel);
       document.body.appendChild(overlay);
-      console.log('自動結合プロンプトを表示しました:', subject);
+      console.log('自動結合プロンプトを表示しました:', subject, 'attendanceMode:', isAttendanceMode);
     } catch (e) {
       console.warn('自動結合プロンプト表示に失敗:', e);
     }
   }
 
   // ダウンロード済みファイルを選択して結合する
-  async function mergeDownloadedFiles(subject, triggerBtn) {
+  async function mergeDownloadedFiles(subject, triggerBtn, isAttendanceMode = false) {
     // ファイル名ガイドオーバーレイを作成
     const guideOverlay = document.createElement('div');
     guideOverlay.style.position = 'fixed';
@@ -560,9 +584,10 @@
       
       const safeSubject = subject.replace(/[\\/\:\*\?"<>\|]/g, '_').slice(0, 120);
       const displayCount = Math.min(10, classCodes.length);
+      const filePrefix = isAttendanceMode ? '出席_' : '';
       
       for (let i = 0; i < displayCount; i++) {
-        const fileName = `${safeSubject}_${classCodes[i]}.csv`;
+        const fileName = `${filePrefix}${safeSubject}_${classCodes[i]}.csv`;
         const fileItem = document.createElement('div');
         fileItem.textContent = `• ${fileName}`;
         fileItem.style.marginBottom = '4px';
@@ -712,7 +737,8 @@
       const mergedText = mergedLines.join('\n');
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const safeSubject = subject.replace(/[\\/\:\*\?"<>\|]/g, '_').slice(0, 120);
-      const filename = `${safeSubject}_merged_${timestamp}.csv`;
+      const filePrefix = isAttendanceMode ? '出席_' : '';
+      const filename = `${filePrefix}${safeSubject}_merged_${timestamp}.csv`;
       
       // 🆕 BOM付きUTF-8として保存（シンプルに）
       console.log(`保存: UTF-8 with BOM (元: ${detectedEncoding || 'utf-16le'})`);
@@ -808,6 +834,217 @@
       // エラーは呼び出し元に伝える
       throw err;
     }
+  }
+
+  // 🆕 出欠テンプレート作成関数
+  async function handleAttendanceTemplate(subject, rowsForSubject, triggerButton) {
+    triggerButton.disabled = true;
+    const originalText = triggerButton.textContent;
+    triggerButton.textContent = '取得中...';
+    const errors = [];
+    
+    // グループ化処理（handleSubjectDownloadと同様）
+    let groups = [];
+    if (rowsForSubject.length > 0 && Array.isArray(rowsForSubject[0])) {
+      groups = rowsForSubject;
+    } else {
+      groups = [];
+      let temp = [];
+      for (let idx = 0; idx < rowsForSubject.length; idx++) {
+        const r = rowsForSubject[idx];
+        const cells = r.querySelectorAll('td');
+        if (cells.length >= 3 && cells[0].textContent.trim().match(/^\d/)) {
+          if (temp.length > 0) groups.push(temp);
+          temp = [r];
+        } else {
+          temp.push(r);
+        }
+      }
+      if (temp.length > 0) groups.push(temp);
+    }
+
+    console.log(`[handleAttendanceTemplate] subject='${subject}' グループ数:`, groups.length);
+
+    // 年度計算（1-3月は前年度）
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+    const fiscalYear = (month >= 1 && month <= 3) ? year - 1 : year;
+    
+    // 本日の日付（YYYY/MM/DD形式）
+    const today = `${year}/${String(month).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}`;
+
+    // 出欠テンプレートのヘッダー（カンマ区切りCSV形式）
+    const templateHeader = '年度,授業コード,授業名,出欠登録日,時限,学籍番号,学生氏名,学年,出席番号,出席,欠席,公欠,出席停止,未調査,備考';
+    const outputLines = [templateHeader];
+    const classCodes = [];
+
+    // 各グループのデータを取得してテンプレートに変換
+    for (let g = 0; g < groups.length; g++) {
+      const groupRows = groups[g];
+      try {
+        triggerButton.textContent = `取得中 ${g+1}/${groups.length}...`;
+        
+        const respText = await fetchCsvFromGroup(groupRows);
+        if (respText === BLOB_DOWNLOADED) {
+          console.log('handleAttendanceTemplate: Blobダウンロード検出（スキップ）');
+          await new Promise(res => setTimeout(res, 300));
+          continue;
+        }
+
+        const mainCells = groupRows.find(r => r.querySelectorAll('td').length >= 3).querySelectorAll('td');
+        const classCode = (mainCells && mainCells[0] && mainCells[0].textContent.trim()) || (`${g+1}`);
+        const className = (mainCells && mainCells[2] && mainCells[2].textContent.trim()) || subject;
+
+        if (respText && respText.trim().length > 0) {
+          classCodes.push(classCode);
+          
+          const lines = respText.split(/\r?\n/).filter(l => l.trim().length > 0);
+          if (lines.length === 0) continue;
+
+          // 元のCSVからデータを抽出（ヘッダーをスキップ）
+          for (let i = 1; i < lines.length; i++) {
+            const line = lines[i];
+            const columns = parseCSVLine(line);
+            
+            if (columns.length < 12) continue; // データが不十分な行はスキップ
+            
+            // 🔍 デバッグ: 最初の行だけログ出力
+            if (i === 1) {
+              console.log('📊 履修者データのサンプル（最初の行）:');
+              console.log('columns.length:', columns.length);
+              console.log('[0]授業コード:', columns[0]);
+              console.log('[1]授業科目名称:', columns[1]);
+              console.log('[4]開始時限:', columns[4]);
+              console.log('[7]学籍番号:', columns[7]);
+              console.log('[8]学生漢字氏名:', columns[8]);
+              console.log('[11]学年:', columns[11]);
+            }
+            
+            // 元データから必要な情報を取得
+            // 履修者データの列構造:
+            // [0]授業コード, [1]授業科目名称, ..., [4]開始時限, ..., [7]学籍番号, [8]学生漢字氏名, ..., [11]学年
+            const subjectName = columns[1] || className; // 授業科目名称
+            const periodRaw = columns[4] || '';
+            // 開始時限（全角数字→半角数字に変換してから数字のみ抽出）
+            const period = periodRaw
+              .replace(/[０-９]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xFEE0)) // 全角→半角
+              .replace(/[^0-9]/g, ''); // 数字のみ抽出
+            const studentId = columns[7] || ''; // 学籍番号
+            const studentName = columns[8] || ''; // 学生漢字氏名
+            const grade = columns[11] || ''; // 学年
+            
+            // 🔍 デバッグ: 時限抽出の確認
+            if (i === 1) {
+              console.log('時限抽出: "' + periodRaw + '" → "' + period + '"');
+            }
+            
+            // CSV用にエスケープする関数（カンマ、ダブルクォート、改行を含む場合はクォートで囲む）
+            const escapeCSV = (value) => {
+              const str = String(value);
+              if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+                return '"' + str.replace(/"/g, '""') + '"';
+              }
+              return str;
+            };
+            
+            // テンプレート形式で出力（カンマ区切りCSV形式）
+            // 年度,授業コード,授業名,出欠登録日,時限,学籍番号,学生氏名,学年,出席番号,出席,欠席,公欠,出席停止,未調査,備考
+            const templateLine = [
+              fiscalYear,
+              classCode,
+              subjectName,
+              today,
+              period,
+              studentId,
+              studentName,
+              grade,
+              '', // 出席番号（空）
+              '', // 出席（空）
+              '', // 欠席（空）
+              '', // 公欠（空）
+              '', // 出席停止（空）
+              '', // 未調査（空）
+              ''  // 備考（空）
+            ].map(escapeCSV).join(',');
+            
+            outputLines.push(templateLine);
+          }
+          
+          console.log(`✅ ${classCode}: ${lines.length - 1}名処理`);
+          await new Promise(res => setTimeout(res, 300));
+          continue;
+        }
+
+        console.warn(`⚠️ ${classCode}: テキスト取得失敗、スキップ`);
+        errors.push(`${classCode}: データ取得に失敗しました`);
+        
+      } catch (err) {
+        console.error('グループのCSV取得失敗:', err);
+        errors.push(err.message || String(err));
+      }
+    }
+
+    // ファイル保存
+    if (outputLines.length > 1) {
+      triggerButton.textContent = '保存中...';
+      
+      const safeSubject = subject.replace(/[\\/\:\*\?"<>\|]/g, '_').slice(0, 80);
+      const classCodesStr = classCodes.join('_');
+      const filename = `出席_${safeSubject}_${classCodesStr}.csv`;
+      
+      const outputText = outputLines.join('\n');
+      downloadTextAsFile(outputText, filename);
+      
+      console.log(`✅ 出欠テンプレート作成完了: ${classCodes.length}グループ、${outputLines.length - 1}名 -> ${filename}`);
+    } else {
+      console.warn('⚠️ 出力するデータがありません');
+      errors.push('出力するデータがありませんでした');
+    }
+
+    triggerButton.textContent = '完了 ✅';
+    setTimeout(() => {
+      triggerButton.textContent = originalText;
+      triggerButton.disabled = false;
+    }, 1200);
+
+    // ダウンロード後に結合ファイル選択ダイアログ誘導
+    if (outputLines.length > 1) {
+      try {
+        showAutoMergePrompt(subject, true); // true = 出欠テンプレートモード
+      } catch (e) {
+        console.warn('自動結合プロンプト表示失敗', e);
+      }
+    }
+
+    if (errors.length > 0) {
+      alert(`一部のファイルで取得エラーがありました:\n${errors.join('\n')}`);
+    }
+  }
+
+  // CSV行をパースする簡易関数（タブ区切りまたはカンマ区切り対応）
+  function parseCSVLine(line) {
+    // タブ区切りを優先
+    if (line.includes('\t')) {
+      return line.split('\t').map(cell => cell.replace(/^"|"$/g, '').trim());
+    }
+    // カンマ区切り（簡易版）
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        inQuotes = !inQuotes;
+      } else if (char === ',' && !inQuotes) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    result.push(current.trim());
+    return result.map(cell => cell.replace(/^"|"$/g, ''));
   }
 
   // 科目のCSVをまとめて取得して結合しダウンロードする

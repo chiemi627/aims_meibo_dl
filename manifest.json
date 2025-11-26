@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "授業科目ソート＆ダウンロード",
-  "version": "1.0",
-  "description": "授業科目一覧のソート、全ページ取得、科目別CSVダウンロード機能",
+  "name": "履修者データ＆出欠テンプレートダウンロード",
+  "version": "2.0",
+  "description": "履修者名簿の科目別ダウンロード、出欠管理用テンプレート作成、複数ページデータ結合機能",
   "content_scripts": [
     {
       "matches": [
