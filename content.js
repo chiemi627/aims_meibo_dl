@@ -103,9 +103,148 @@
 
   document.body.appendChild(subjectPanel);
 
+  // localStorage関連のユーティリティ
+  const STORAGE_PREFIX = 'ntut_subject_data_';
+  
+  // groupRows から データ配列に変換
+  function extractDataFromGroup(grp) {
+    const mainRow = grp.find(r => r.querySelectorAll('td').length >= 3);
+    if (!mainRow) return null;
+    
+    const cells = mainRow.querySelectorAll('td');
+    
+    const data = {
+      classCode: cells[0]?.textContent.trim() || '',
+      班: cells[1]?.textContent.trim() || '',
+      科目名: cells[2]?.textContent.trim() || '',
+      単位: cells[3]?.textContent.trim() || '',
+      必選: cells[4]?.textContent.trim() || '',
+      年次: cells[5]?.textContent.trim() || '',
+      学期: cells[6]?.textContent.trim() || '',
+      曜日: cells[7]?.textContent.trim() || '',
+      時限: cells[8]?.textContent.trim() || '',
+      教室: cells[9]?.textContent.trim() || '',
+      担当教員: cells[10]?.textContent.trim() || ''
+    };
+    return data;
+  }
+  
+  // localStorage に科目データを保存（重複排除あり）
+  function saveToLocalStorage(subject, groupsForSubject) {
+    try {
+      const key = STORAGE_PREFIX + subject;
+      let existing = [];
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        existing = JSON.parse(stored);
+      }
+      
+      // 各グループを授業コードで重複チェック
+      groupsForSubject.forEach(grp => {
+        const data = extractDataFromGroup(grp);
+        if (!data || !data.classCode) return;
+        
+        // 既存データに同じ授業コードがあるかチェック
+        const isDuplicate = existing.some(existingData => {
+          return existingData.classCode === data.classCode;
+        });
+        
+        if (!isDuplicate) {
+          existing.push(data);
+        }
+      });
+      
+      localStorage.setItem(key, JSON.stringify(existing));
+      console.log(`localStorage保存: ${subject} (${existing.length}件)`);
+    } catch (e) {
+      console.error('localStorage保存エラー:', e);
+    }
+  }
+  
+  // localStorage から全科目データを読み込み
+  function loadAllFromLocalStorage() {
+    const allData = new Map();
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(STORAGE_PREFIX)) {
+          const subject = key.substring(STORAGE_PREFIX.length);
+          const data = JSON.parse(localStorage.getItem(key) || '[]');
+          if (data.length > 0) {
+            allData.set(subject, data);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('localStorage読み込みエラー:', e);
+    }
+    return allData;
+  }
+  
+  // localStorage をクリア
+  function clearLocalStorage() {
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(STORAGE_PREFIX)) {
+          keys.push(key);
+        }
+      }
+      keys.forEach(k => localStorage.removeItem(k));
+      console.log(`localStorage クリア: ${keys.length}件削除`);
+      return keys.length;
+    } catch (e) {
+      console.error('localStorage クリアエラー:', e);
+      return 0;
+    }
+  }
+
   // 科目ボタンを作成する (ロード時・更新ボタンで呼ぶ)
   function buildSubjectButtons() {
     subjectList.innerHTML = '';
+    
+    // クリアボタンと保存状況を最初に追加
+    const topControls = document.createElement('div');
+    topControls.style.display = 'flex';
+    topControls.style.gap = '8px';
+    topControls.style.marginBottom = '12px';
+    topControls.style.paddingBottom = '12px';
+    topControls.style.borderBottom = '1px solid #ddd';
+    
+    // localStorage保存状況を表示
+    const savedData = loadAllFromLocalStorage();
+    let savedTotal = 0;
+    savedData.forEach(groups => { savedTotal += groups.length; });
+    
+    const statusDiv = document.createElement('div');
+    statusDiv.style.flex = '1';
+    statusDiv.style.fontSize = '13px';
+    statusDiv.style.color = '#666';
+    statusDiv.style.padding = '8px';
+    statusDiv.textContent = `💾 保存中: ${savedTotal}件 (${savedData.size}科目)`;
+    
+    const clearBtn = document.createElement('button');
+    clearBtn.textContent = '🗑️ クリア';
+    clearBtn.style.flex = '0 0 auto';
+    clearBtn.style.padding = '8px 12px';
+    clearBtn.style.fontSize = '13px';
+    clearBtn.style.background = '#f44336';
+    clearBtn.style.color = 'white';
+    clearBtn.style.border = 'none';
+    clearBtn.style.borderRadius = '4px';
+    clearBtn.style.cursor = 'pointer';
+    clearBtn.onclick = () => {
+      if (confirm('localStorage の保存データをすべてクリアしますか？')) {
+        const count = clearLocalStorage();
+        alert(`${count}件の科目データをクリアしました`);
+        buildSubjectButtons(); // 再描画
+      }
+    };
+    
+    topControls.appendChild(statusDiv);
+    topControls.appendChild(clearBtn);
+    subjectList.appendChild(topControls);
 
     const tbody = targetTable.querySelector('tbody') || targetTable;
     const rows = Array.from(tbody.querySelectorAll('tr'));
@@ -178,58 +317,114 @@
       wrapper.style.justifyContent = 'space-between';
       wrapper.style.marginBottom = '6px';
 
-  const label = document.createElement('div');
-  label.textContent = `${subject} (${groupsForSubject.length})`;
+      // 🆕 localStorage から保存数を取得
+      let storedCount = 0;
+      const key = STORAGE_PREFIX + subject;
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        try {
+          const data = JSON.parse(stored);
+          storedCount = data.length;
+        } catch (e) {}
+      }
+      
+      const label = document.createElement('div');
+      // 現在ページ件数 + localStorage保存数を表示
+      const currentCount = groupsForSubject.length;
+      const totalCount = storedCount;
+      if (totalCount > currentCount) {
+        label.textContent = `${subject} (現在${currentCount}件 / 保存${totalCount}件)`;
+      } else {
+        label.textContent = `${subject} (${currentCount}件)`;
+      }
       label.style.flex = '1';
       label.style.marginRight = '6px';
       label.style.fontSize = '13px';
       label.title = subject;
 
-  const btnContainer = document.createElement('div');
-  btnContainer.style.display = 'flex';
-  btnContainer.style.gap = '4px';
-  btnContainer.style.flex = '0 0 auto';
+      const btnContainer = document.createElement('div');
+      btnContainer.style.display = 'flex';
+      btnContainer.style.gap = '4px';
+      btnContainer.style.flex = '0 0 auto';
 
-  const downloadBtn = document.createElement('button');
-  downloadBtn.textContent = '全てDL';
-  downloadBtn.style.fontSize = '11px';
-  downloadBtn.style.padding = '2px 6px';
-  downloadBtn.onclick = () => handleSubjectDownload(subject, groupsForSubject, downloadBtn);
+      const downloadBtn = document.createElement('button');
+      downloadBtn.textContent = '全てDL';
+      downloadBtn.style.fontSize = '11px';
+      downloadBtn.style.padding = '2px 6px';
+      downloadBtn.onclick = () => handleSubjectDownload(subject, groupsForSubject, downloadBtn);
 
-  btnContainer.appendChild(downloadBtn);
+      btnContainer.appendChild(downloadBtn);
 
       wrapper.appendChild(label);
       wrapper.appendChild(btnContainer);
-      // 各グループ（科目番号）ごとの小さなボタンを追加
+      
+      // 🆕 localStorage から保存データを取得して、現在のページデータとマージ
+      let allClassCodes = new Map(); // classCode -> grp (DOM要素)
+      
+      // 現在のページのデータを追加（DOM要素を保持）
+      groupsForSubject.forEach(grp => {
+        const data = extractDataFromGroup(grp);
+        if (data && data.classCode) {
+          allClassCodes.set(data.classCode, grp);
+        }
+      });
+      
+      // localStorageのデータから授業コードリストを追加（DOM要素なし）
+      if (stored) {
+        try {
+          const storedData = JSON.parse(stored);
+          storedData.forEach(data => {
+            if (data && data.classCode && !allClassCodes.has(data.classCode)) {
+              allClassCodes.set(data.classCode, null); // localStorage由来はnull
+            }
+          });
+        } catch (e) {
+          console.error('localStorage読み込みエラー:', e);
+        }
+      }
+      
+      // 各グループ（授業コード）ごとの小さなボタンを追加
       const groupList = document.createElement('div');
       groupList.style.display = 'flex';
       groupList.style.flexDirection = 'column';
       groupList.style.marginTop = '6px';
-      groupsForSubject.forEach((grp, gi) => {
+      
+      // 全ての授業コード（現在ページ + localStorage）に対してボタンを生成
+      allClassCodes.forEach((grp, classCode) => {
         const sub = document.createElement('div');
         sub.style.display = 'flex';
         sub.style.justifyContent = 'space-between';
         sub.style.marginTop = '2px';
-        const mainCells = grp.find(r => r.querySelectorAll('td').length >= 3).querySelectorAll('td');
-        const classCode = (mainCells && mainCells[0] && mainCells[0].textContent.trim()) || (`${gi+1}`);
+        
         const subLabel = document.createElement('div');
         subLabel.textContent = classCode;
         subLabel.style.fontSize = '12px';
         subLabel.style.flex = '1';
+        
         const subBtn = document.createElement('button');
         subBtn.textContent = 'DL';
         subBtn.style.flex = '0 0 auto';
         subBtn.title = `${subject} - ${classCode}`;
-        subBtn.onclick = async () => {
+        
+        // 現在のページに存在する場合のみダウンロード可能
+        if (grp) {
+          subBtn.onclick = async () => {
+            subBtn.disabled = true;
+            try {
+              await downloadGroup(subject, grp, subBtn);
+            } catch (e) {
+              console.error('個別グループのダウンロード失敗', e);
+              alert(`ダウンロードに失敗しました: ${e.message || e}`);
+            }
+            subBtn.disabled = false;
+          };
+        } else {
+          // localStorage由来（現在のページにない）場合は無効化
           subBtn.disabled = true;
-          try {
-            await downloadGroup(subject, grp, subBtn);
-          } catch (e) {
-            console.error('個別グループのダウンロード失敗', e);
-            alert(`ダウンロードに失敗しました: ${e.message || e}`);
-          }
-          subBtn.disabled = false;
-        };
+          subBtn.style.opacity = '0.5';
+          subBtn.title = `${subject} - ${classCode} (このページにはありません)`;
+        }
+        
         sub.appendChild(subLabel);
         sub.appendChild(subBtn);
         groupList.appendChild(sub);
@@ -237,6 +432,17 @@
       wrapper.appendChild(groupList);
       subjectList.appendChild(wrapper);
     });
+    
+    // localStorage に自動保存（重複排除あり）
+    subjectMap.forEach((groupsForSubject, subject) => {
+      saveToLocalStorage(subject, groupsForSubject);
+    });
+    
+    // 保存済みデータ件数を表示
+    const allData = loadAllFromLocalStorage();
+    let totalCount = 0;
+    allData.forEach(groups => { totalCount += groups.length; });
+    console.log(`localStorage総保存数: ${totalCount}件 (${allData.size}科目)`);
   }
 
   function getClassCodeFromGroup(groupRows) {
@@ -339,6 +545,121 @@
 
   // ダウンロード済みファイルを選択して結合する
   async function mergeDownloadedFiles(subject, triggerBtn) {
+    // ファイル名ガイドオーバーレイを作成
+    const guideOverlay = document.createElement('div');
+    guideOverlay.style.position = 'fixed';
+    guideOverlay.style.top = '50%';
+    guideOverlay.style.left = '50%';
+    guideOverlay.style.transform = 'translate(-50%, -50%)';
+    guideOverlay.style.background = 'rgba(255, 255, 255, 0.98)';
+    guideOverlay.style.border = '3px solid #9C27B0';
+    guideOverlay.style.borderRadius = '12px';
+    guideOverlay.style.padding = '24px';
+    guideOverlay.style.zIndex = '999999';
+    guideOverlay.style.maxWidth = '600px';
+    guideOverlay.style.maxHeight = '80vh';
+    guideOverlay.style.overflow = 'auto';
+    guideOverlay.style.boxShadow = '0 8px 32px rgba(0,0,0,0.3)';
+    guideOverlay.style.fontFamily = 'sans-serif';
+    
+    const guideTitle = document.createElement('h3');
+    guideTitle.textContent = `📁 「${subject}」のファイルを選択してください`;
+    guideTitle.style.margin = '0 0 16px 0';
+    guideTitle.style.color = '#9C27B0';
+    guideTitle.style.fontSize = '18px';
+    
+    const guideContent = document.createElement('div');
+    
+    // localStorage から科目の全授業コードを取得
+    const key = STORAGE_PREFIX + subject;
+    const stored = localStorage.getItem(key);
+    let classCodes = [];
+    
+    if (stored) {
+      try {
+        const data = JSON.parse(stored);
+        classCodes = data.map(d => d.classCode).filter(c => c);
+      } catch (e) {
+        console.error('localStorage読み込みエラー:', e);
+      }
+    }
+    
+    if (classCodes.length > 0) {
+      const codesTitle = document.createElement('div');
+      codesTitle.textContent = '【保存されている授業コード】';
+      codesTitle.style.fontWeight = 'bold';
+      codesTitle.style.marginBottom = '8px';
+      codesTitle.style.color = '#666';
+      
+      const codesList = document.createElement('div');
+      codesList.textContent = classCodes.join(', ');
+      codesList.style.padding = '12px';
+      codesList.style.background = '#f5f5f5';
+      codesList.style.borderRadius = '6px';
+      codesList.style.marginBottom = '16px';
+      codesList.style.fontSize = '14px';
+      codesList.style.lineHeight = '1.6';
+      
+      const filesTitle = document.createElement('div');
+      filesTitle.textContent = '【期待されるファイル名】';
+      filesTitle.style.fontWeight = 'bold';
+      filesTitle.style.marginBottom = '8px';
+      filesTitle.style.color = '#666';
+      
+      const filesList = document.createElement('div');
+      filesList.style.padding = '12px';
+      filesList.style.background = '#f5f5f5';
+      filesList.style.borderRadius = '6px';
+      filesList.style.fontSize = '13px';
+      filesList.style.lineHeight = '1.8';
+      filesList.style.fontFamily = 'monospace';
+      
+      const safeSubject = subject.replace(/[\\/\:\*\?"<>\|]/g, '_').slice(0, 120);
+      const displayCount = Math.min(10, classCodes.length);
+      
+      for (let i = 0; i < displayCount; i++) {
+        const fileName = `${safeSubject}_${classCodes[i]}.csv`;
+        const fileItem = document.createElement('div');
+        fileItem.textContent = `• ${fileName}`;
+        fileItem.style.marginBottom = '4px';
+        filesList.appendChild(fileItem);
+      }
+      
+      if (classCodes.length > displayCount) {
+        const moreItem = document.createElement('div');
+        moreItem.textContent = `... 他 ${classCodes.length - displayCount}件`;
+        moreItem.style.marginTop = '8px';
+        moreItem.style.color = '#999';
+        moreItem.style.fontStyle = 'italic';
+        filesList.appendChild(moreItem);
+      }
+      
+      guideContent.appendChild(codesTitle);
+      guideContent.appendChild(codesList);
+      guideContent.appendChild(filesTitle);
+      guideContent.appendChild(filesList);
+    } else {
+      const noData = document.createElement('div');
+      noData.textContent = '保存された授業コードがありません。';
+      noData.style.padding = '12px';
+      noData.style.background = '#fff3cd';
+      noData.style.borderRadius = '6px';
+      noData.style.color = '#856404';
+      guideContent.appendChild(noData);
+    }
+    
+    const guideNote = document.createElement('div');
+    guideNote.textContent = 'このウィンドウはファイル選択後に自動で閉じます';
+    guideNote.style.marginTop = '16px';
+    guideNote.style.fontSize = '12px';
+    guideNote.style.color = '#999';
+    guideNote.style.textAlign = 'center';
+    
+    guideOverlay.appendChild(guideTitle);
+    guideOverlay.appendChild(guideContent);
+    guideOverlay.appendChild(guideNote);
+    document.body.appendChild(guideOverlay);
+    
     try {
       const originalText = triggerBtn ? triggerBtn.textContent : null;
       if (triggerBtn) {
@@ -346,7 +667,7 @@
         triggerBtn.disabled = true;
       }
 
-      // File System Access API でファイル選択
+      // File System Access API でファイル選択（オーバーレイと同時表示）
       const fileHandles = await window.showOpenFilePicker({
         multiple: true,
         types: [{
@@ -358,8 +679,14 @@
           }
         }]
       });
+      
+      // オーバーレイを削除
+      guideOverlay.remove();
+      
+      console.log('mergeDownloadedFiles: ファイルが選択されました', fileHandles.length);
 
       if (fileHandles.length === 0) {
+        guideOverlay.remove();
         alert('ファイルが選択されませんでした');
         if (triggerBtn) {
           triggerBtn.textContent = originalText;
@@ -470,6 +797,11 @@
       alert(`${fileHandles.length}個のファイルを結合しました!\n合計: ${mergedLines.length}行\nファイル名: ${filename}`);
 
     } catch (err) {
+      // オーバーレイが残っていたら削除
+      if (guideOverlay && guideOverlay.parentNode) {
+        guideOverlay.remove();
+      }
+      
       if (err.name === 'AbortError') {
         console.log('ファイル選択がキャンセルされました');
       } else {
