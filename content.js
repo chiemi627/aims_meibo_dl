@@ -188,7 +188,19 @@
     statusDiv.style.fontSize = '13px';
     statusDiv.style.color = '#666';
     statusDiv.style.padding = '8px';
-    statusDiv.textContent = `💾 保存中: ${savedTotal}件 (${savedData.size}科目)`;
+    statusDiv.textContent = `💾 授業別科目番号収集: ${savedTotal}件 (${savedData.size}科目)`;
+    
+    // 🆕 表示/非表示切り替えボタン
+    const toggleBtn = document.createElement('button');
+    toggleBtn.textContent = '▼ 科目一覧';
+    toggleBtn.style.flex = '0 0 auto';
+    toggleBtn.style.padding = '8px 12px';
+    toggleBtn.style.fontSize = '13px';
+    toggleBtn.style.background = '#2196F3';
+    toggleBtn.style.color = 'white';
+    toggleBtn.style.border = 'none';
+    toggleBtn.style.borderRadius = '4px';
+    toggleBtn.style.cursor = 'pointer';
     
     const clearBtn = document.createElement('button');
     clearBtn.textContent = '🗑️ クリア';
@@ -209,8 +221,34 @@
     };
     
     topControls.appendChild(statusDiv);
+    topControls.appendChild(toggleBtn);
     topControls.appendChild(clearBtn);
     subjectList.appendChild(topControls);
+    
+    // 🆕 科目一覧コンテナ（表示/非表示の対象）
+    const subjectListContainer = document.createElement('div');
+    subjectListContainer.id = 'subject-list-container';
+    
+    // トグル状態をlocalStorageから復元（デフォルトは非表示）
+    const isListVisible = localStorage.getItem('ntutdx1_listVisible') === 'true';
+    subjectListContainer.style.display = isListVisible ? 'block' : 'none';
+    toggleBtn.textContent = isListVisible ? '▲ 科目一覧' : '▼ 科目一覧';
+    
+    subjectList.appendChild(subjectListContainer);
+    
+    // 🆕 切り替え処理
+    toggleBtn.onclick = () => {
+      const isVisible = subjectListContainer.style.display !== 'none';
+      if (isVisible) {
+        subjectListContainer.style.display = 'none';
+        toggleBtn.textContent = '▼ 科目一覧';
+        localStorage.setItem('ntutdx1_listVisible', 'false');
+      } else {
+        subjectListContainer.style.display = 'block';
+        toggleBtn.textContent = '▲ 科目一覧';
+        localStorage.setItem('ntutdx1_listVisible', 'true');
+      }
+    };
 
     const tbody = targetTable.querySelector('tbody') || targetTable;
     const rows = Array.from(tbody.querySelectorAll('tr'));
@@ -284,8 +322,11 @@
       const wrapper = document.createElement('div');
       wrapper.style.display = 'flex';
       wrapper.style.alignItems = 'center';
-      wrapper.style.justifyContent = 'space-between';
+      wrapper.style.gap = '8px';
       wrapper.style.marginBottom = '6px';
+      wrapper.style.padding = '6px 8px';
+      wrapper.style.background = '#f5f5f5';
+      wrapper.style.borderRadius = '4px';
 
       // 🆕 localStorage から保存数を取得
       let storedCount = 0;
@@ -303,13 +344,13 @@
       const currentCount = groupsForSubject.length;
       const totalCount = storedCount;
       if (totalCount > currentCount) {
-        label.textContent = `${subject} (現在${currentCount}件 / 保存${totalCount}件)`;
+        label.textContent = `${subject} (現ページ：${currentCount}件 / 保存${totalCount}件)`;
       } else {
         label.textContent = `${subject} (${currentCount}件)`;
       }
       label.style.flex = '1';
-      label.style.marginRight = '6px';
       label.style.fontSize = '13px';
+      label.style.fontWeight = '500';
       label.title = subject;
 
       const btnContainer = document.createElement('div');
@@ -319,15 +360,21 @@
 
       const downloadBtn = document.createElement('button');
       downloadBtn.textContent = 'ダウンロード';
-      downloadBtn.style.fontSize = '11px';
-      downloadBtn.style.padding = '2px 6px';
+      downloadBtn.style.fontSize = '12px';
+      downloadBtn.style.padding = '4px 10px';
+      downloadBtn.style.background = '#4CAF50';
+      downloadBtn.style.color = 'white';
+      downloadBtn.style.border = 'none';
+      downloadBtn.style.borderRadius = '3px';
+      downloadBtn.style.cursor = 'pointer';
+      downloadBtn.style.whiteSpace = 'nowrap';
       downloadBtn.onclick = () => handleSubjectDownload(subject, groupsForSubject, downloadBtn);
 
       btnContainer.appendChild(downloadBtn);
 
       wrapper.appendChild(label);
       wrapper.appendChild(btnContainer);
-      subjectList.appendChild(wrapper);
+      subjectListContainer.appendChild(wrapper);
     });
     
     // localStorage に自動保存（重複排除あり）
