@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Hello World Extension",
+  "name": "授業科目ソート＆ダウンロード",
   "version": "1.0",
-  "description": "指定されたページでHello Worldを表示する拡張機能",
+  "description": "授業科目一覧のソート、全ページ取得、科目別CSVダウンロード機能",
   "content_scripts": [
     {
       "matches": ["https://aims.ad.tsukuba-tech.ac.jp/aa_web/meiboDownload/jm0010.aspx*"],
