@@ -582,13 +582,33 @@
       label.style.fontSize = '13px';
       label.title = subject;
 
-  const btn = document.createElement('button');
-  btn.textContent = '全てダウンロード';
-  btn.style.flex = '0 0 auto';
-  btn.onclick = () => handleSubjectDownload(subject, groupsForSubject, btn);
+  const btnContainer = document.createElement('div');
+  btnContainer.style.display = 'flex';
+  btnContainer.style.gap = '4px';
+  btnContainer.style.flex = '0 0 auto';
+
+  const downloadBtn = document.createElement('button');
+  downloadBtn.textContent = '全てDL';
+  downloadBtn.style.fontSize = '11px';
+  downloadBtn.style.padding = '2px 6px';
+  downloadBtn.onclick = () => handleSubjectDownload(subject, groupsForSubject, downloadBtn);
+
+  const mergeBtn = document.createElement('button');
+  mergeBtn.textContent = '結合';
+  mergeBtn.style.fontSize = '11px';
+  mergeBtn.style.padding = '2px 6px';
+  mergeBtn.style.backgroundColor = '#9C27B0';
+  mergeBtn.style.color = 'white';
+  mergeBtn.style.border = 'none';
+  mergeBtn.style.borderRadius = '3px';
+  mergeBtn.style.cursor = 'pointer';
+  mergeBtn.onclick = () => mergeDownloadedFiles(subject, mergeBtn);
+
+  btnContainer.appendChild(downloadBtn);
+  btnContainer.appendChild(mergeBtn);
 
       wrapper.appendChild(label);
-      wrapper.appendChild(btn);
+      wrapper.appendChild(btnContainer);
       // 各グループ（科目番号）ごとの小さなボタンを追加
       const groupList = document.createElement('div');
       groupList.style.display = 'flex';
@@ -633,6 +653,199 @@
     if (!main) return null;
     const cells = main.querySelectorAll('td');
     return (cells && cells[0] && cells[0].textContent.trim()) || null;
+  }
+
+  // ダウンロード済みファイルを選択して結合する
+  async function mergeDownloadedFiles(subject, triggerBtn) {
+    try {
+      const originalText = triggerBtn.textContent;
+      triggerBtn.textContent = '選択...';
+      triggerBtn.disabled = true;
+
+      // File System Access API でファイル選択
+      const fileHandles = await window.showOpenFilePicker({
+        multiple: true,
+        types: [{
+          description: 'CSV/TSV Files',
+          accept: {
+            'text/csv': ['.csv'],
+            'text/tab-separated-values': ['.tsv'],
+            'text/plain': ['.txt']
+          }
+        }]
+      });
+
+      if (fileHandles.length === 0) {
+        alert('ファイルが選択されませんでした');
+        triggerBtn.textContent = originalText;
+        triggerBtn.disabled = false;
+        return;
+      }
+
+      triggerBtn.textContent = '読込中...';
+
+      const allLines = [];
+      let header = null;
+      const encodings = ['utf-16le', 'utf-16be', 'shift_jis', 'utf-8', 'euc-jp'];
+      let detectedEncoding = null;
+
+      for (const fileHandle of fileHandles) {
+        const file = await fileHandle.getFile();
+        const arrayBuffer = await file.arrayBuffer();
+        
+        // 複数エンコーディングを試す（最初のファイルでエンコーディングを決定）
+        let text = null;
+        const tryEncodings = detectedEncoding ? [detectedEncoding] : encodings;
+        
+        for (const encoding of tryEncodings) {
+          try {
+            const decoder = new TextDecoder(encoding, { fatal: false });
+            const decoded = decoder.decode(arrayBuffer);
+            
+            // デバッグ: デコード結果を確認
+            console.log(`🔍 ${file.name} - ${encoding}:`, {
+              textLength: decoded.length,
+              preview: decoded.substring(0, 50),
+              置換文字数: (decoded.match(/\uFFFD/g) || []).length
+            });
+            
+            // 区切り文字を検出（カンマ、タブ）
+            const commaCount = (decoded.match(/,/g) || []).length;
+            const tabCount = (decoded.match(/\t/g) || []).length;
+            const hasJapanese = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf]/.test(decoded);
+            const replacementCharCount = (decoded.match(/\uFFFD/g) || []).length;
+            const replacementRatio = replacementCharCount / decoded.length;
+            
+            // 判定: 区切り文字があり、日本語があり、置換文字が5%未満
+            if ((commaCount > 0 || tabCount > 5) && hasJapanese && replacementRatio < 0.05) {
+              text = decoded;
+              if (!detectedEncoding) {
+                detectedEncoding = encoding;
+                console.log(`✅ エンコーディング決定: ${encoding}`);
+              }
+              console.log(`${file.name}: ${encoding} で読み取り成功 (タブ:${tabCount}, カンマ:${commaCount})`);
+              break;
+            }
+          } catch (e) {
+            console.warn(`${encoding} デコード失敗:`, e);
+          }
+        }
+
+        if (!text) {
+          console.warn(`${file.name}: 読み取りに失敗しました`);
+          continue;
+        }
+
+        const lines = text.split(/\r?\n/).filter(line => line.trim());
+        
+        if (lines.length === 0) continue;
+
+        // 最初のファイルのヘッダーを保存
+        if (!header) {
+          header = lines[0];
+          allLines.push(...lines);
+        } else {
+          // 2ファイル目以降はヘッダーをスキップ
+          allLines.push(...lines.slice(1));
+        }
+      }
+
+      if (allLines.length === 0) {
+        alert('結合できるデータがありませんでした');
+        triggerBtn.textContent = originalText;
+        triggerBtn.disabled = false;
+        return;
+      }
+
+      // 🆕 全ファイルを正しくデコードしてUTF-8で結合
+      const mergedLines = [];
+      
+      for (let i = 0; i < fileHandles.length; i++) {
+        const file = await fileHandles[i].getFile();
+        const arrayBuffer = await file.arrayBuffer();
+        
+        // 検出されたエンコーディングでデコード
+        const decoder = new TextDecoder(detectedEncoding || 'utf-16le', { fatal: false });
+        const text = decoder.decode(arrayBuffer);
+        
+        // 行に分割（空行を除外）
+        const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+        
+        if (lines.length === 0) continue;
+        
+        // 🆕 タブ区切りをカンマ区切りに変換
+        const convertedLines = lines.map(line => {
+          // タブをカンマに置き換え
+          // ただし、フィールド内にカンマが含まれる場合はダブルクォートで囲む
+          const fields = line.split('\t');
+          const csvFields = fields.map(field => {
+            // フィールドにカンマ、ダブルクォート、改行が含まれる場合はダブルクォートで囲む
+            if (field.includes(',') || field.includes('"') || field.includes('\n') || field.includes('\r')) {
+              // ダブルクォートをエスケープ（""に置換）
+              const escaped = field.replace(/"/g, '""');
+              return `"${escaped}"`;
+            }
+            return field;
+          });
+          return csvFields.join(',');
+        });
+        
+        if (i === 0) {
+          // 最初のファイルは全行
+          mergedLines.push(...convertedLines);
+        } else {
+          // 2ファイル目以降はヘッダーをスキップ
+          mergedLines.push(...convertedLines.slice(1));
+        }
+      }
+      
+      if (mergedLines.length === 0) {
+        alert('結合できるデータがありませんでした');
+        triggerBtn.textContent = originalText;
+        triggerBtn.disabled = false;
+        return;
+      }
+      
+      const mergedText = mergedLines.join('\n');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const safeSubject = subject.replace(/[\\/\:\*\?"<>\|]/g, '_').slice(0, 120);
+      const filename = `${safeSubject}_merged_${timestamp}.csv`;
+      
+      // 🆕 BOM付きUTF-8として保存（シンプルに）
+      console.log(`保存: UTF-8 with BOM (元: ${detectedEncoding || 'shift_jis'})`);
+      const bom = '\uFEFF';
+      const blob = new Blob([bom + mergedText], { type: 'text/plain;charset=utf-8' });
+      
+      downloadBlob(blob, filename);
+      
+      console.log('✅ 結合完了:', {
+        ファイル数: fileHandles.length,
+        総行数: mergedLines.length,
+        ファイル名: filename,
+        元エンコーディング: detectedEncoding || 'utf-16le',
+        保存形式: 'UTF-8 with BOM (カンマ区切り)',
+        サイズ: blob.size,
+        プレビュー: mergedLines[0]?.substring(0, 50)
+      });
+
+      triggerBtn.textContent = `✅ ${fileHandles.length}件`;
+      setTimeout(() => {
+        triggerBtn.textContent = originalText;
+        triggerBtn.disabled = false;
+      }, 2000);
+
+      alert(`${fileHandles.length}個のファイルを結合しました!\n合計: ${allLines.length}行\nファイル名: ${filename}`);
+
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        console.log('ファイル選択がキャンセルされました');
+      } else {
+        console.error('ファイル結合エラー:', err);
+        alert('ファイル結合に失敗しました: ' + err.message);
+      }
+      triggerBtn.textContent = '結合';
+      triggerBtn.disabled = false;
+    }
   }
 
   async function downloadGroup(subject, groupRows, triggerBtn) {
