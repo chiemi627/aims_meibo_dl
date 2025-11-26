@@ -593,19 +593,7 @@
   downloadBtn.style.padding = '2px 6px';
   downloadBtn.onclick = () => handleSubjectDownload(subject, groupsForSubject, downloadBtn);
 
-  const mergeBtn = document.createElement('button');
-  mergeBtn.textContent = '結合';
-  mergeBtn.style.fontSize = '11px';
-  mergeBtn.style.padding = '2px 6px';
-  mergeBtn.style.backgroundColor = '#9C27B0';
-  mergeBtn.style.color = 'white';
-  mergeBtn.style.border = 'none';
-  mergeBtn.style.borderRadius = '3px';
-  mergeBtn.style.cursor = 'pointer';
-  mergeBtn.onclick = () => mergeDownloadedFiles(subject, mergeBtn);
-
   btnContainer.appendChild(downloadBtn);
-  btnContainer.appendChild(mergeBtn);
 
       wrapper.appendChild(label);
       wrapper.appendChild(btnContainer);
@@ -655,12 +643,105 @@
     return (cells && cells[0] && cells[0].textContent.trim()) || null;
   }
 
+  // 旧: 科目 -> 結合ボタン参照は不要になった（結合ボタン削除）
+
+  // ダウンロード完了後に結合操作を促すオーバーレイを表示
+  function showAutoMergePrompt(subject) {
+    try {
+      // 既に表示中なら再利用
+      const existing = document.getElementById('auto-merge-overlay');
+      if (existing) {
+        existing.querySelector('.auto-merge-subject').textContent = subject;
+        existing.style.display = 'flex';
+        return;
+      }
+      const overlay = document.createElement('div');
+      overlay.id = 'auto-merge-overlay';
+      overlay.style.position = 'fixed';
+      overlay.style.top = '0';
+      overlay.style.left = '0';
+      overlay.style.width = '100%';
+      overlay.style.height = '100%';
+      overlay.style.background = 'rgba(0,0,0,0.45)';
+      overlay.style.zIndex = '999999';
+      overlay.style.display = 'flex';
+      overlay.style.alignItems = 'center';
+      overlay.style.justifyContent = 'center';
+      overlay.style.fontFamily = 'sans-serif';
+
+      const panel = document.createElement('div');
+      panel.style.background = '#ffffff';
+      panel.style.padding = '20px 24px';
+      panel.style.borderRadius = '8px';
+      panel.style.minWidth = '320px';
+      panel.style.maxWidth = '480px';
+      panel.style.boxShadow = '0 4px 18px rgba(0,0,0,0.25)';
+      panel.style.display = 'flex';
+      panel.style.flexDirection = 'column';
+      panel.style.gap = '12px';
+
+      const title = document.createElement('h2');
+      title.textContent = 'ファイル結合';
+      title.style.margin = '0';
+      title.style.fontSize = '18px';
+      title.style.color = '#333';
+
+      const subjectLine = document.createElement('div');
+      subjectLine.innerHTML = '科目: <span class="auto-merge-subject" style="font-weight:bold"></span>';
+      subjectLine.querySelector('.auto-merge-subject').textContent = subject;
+      subjectLine.style.fontSize = '14px';
+
+      const info = document.createElement('div');
+      info.textContent = 'ダウンロードが完了しました。結合したいファイルを選択してください。';
+      info.style.fontSize = '13px';
+      info.style.color = '#555';
+
+      const actions = document.createElement('div');
+      actions.style.display = 'flex';
+      actions.style.gap = '10px';
+      actions.style.justifyContent = 'flex-end';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = '閉じる';
+      cancelBtn.style.padding = '6px 14px';
+      cancelBtn.onclick = () => { overlay.style.display = 'none'; };
+
+      const pickBtn = document.createElement('button');
+      pickBtn.textContent = 'ファイル選択して結合';
+      pickBtn.style.padding = '6px 14px';
+      pickBtn.style.background = '#9C27B0';
+      pickBtn.style.color = '#fff';
+      pickBtn.style.border = 'none';
+      pickBtn.style.borderRadius = '4px';
+      pickBtn.style.cursor = 'pointer';
+      pickBtn.onclick = () => {
+        overlay.style.display = 'none';
+        // 結合ボタンは削除したため triggerBtn を null で呼び出す
+        mergeDownloadedFiles(subject, null);
+      };
+
+      actions.appendChild(cancelBtn);
+      actions.appendChild(pickBtn);
+      panel.appendChild(title);
+      panel.appendChild(subjectLine);
+      panel.appendChild(info);
+      panel.appendChild(actions);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+      console.log('自動結合プロンプトを表示しました:', subject);
+    } catch (e) {
+      console.warn('自動結合プロンプト表示に失敗:', e);
+    }
+  }
+
   // ダウンロード済みファイルを選択して結合する
   async function mergeDownloadedFiles(subject, triggerBtn) {
     try {
-      const originalText = triggerBtn.textContent;
-      triggerBtn.textContent = '選択...';
-      triggerBtn.disabled = true;
+      const originalText = triggerBtn ? triggerBtn.textContent : null;
+      if (triggerBtn) {
+        triggerBtn.textContent = '選択...';
+        triggerBtn.disabled = true;
+      }
 
       // File System Access API でファイル選択
       const fileHandles = await window.showOpenFilePicker({
@@ -677,142 +758,90 @@
 
       if (fileHandles.length === 0) {
         alert('ファイルが選択されませんでした');
-        triggerBtn.textContent = originalText;
-        triggerBtn.disabled = false;
+        if (triggerBtn) {
+          triggerBtn.textContent = originalText;
+          triggerBtn.disabled = false;
+        }
         return;
       }
 
-      triggerBtn.textContent = '読込中...';
-
-      const allLines = [];
-      let header = null;
-      const encodings = ['utf-16le', 'utf-16be', 'shift_jis', 'utf-8', 'euc-jp'];
+  if (triggerBtn) triggerBtn.textContent = '読込中...';
+      // 1パスでエンコーディング検出 & 結合処理
+      const preferredEncodings = ['utf-16le', 'utf-16be', 'shift_jis', 'utf-8', 'euc-jp'];
       let detectedEncoding = null;
+      const mergedLines = [];
 
-      for (const fileHandle of fileHandles) {
-        const file = await fileHandle.getFile();
-        const arrayBuffer = await file.arrayBuffer();
-        
-        // 複数エンコーディングを試す（最初のファイルでエンコーディングを決定）
-        let text = null;
-        const tryEncodings = detectedEncoding ? [detectedEncoding] : encodings;
-        
-        for (const encoding of tryEncodings) {
+      for (let fileIndex = 0; fileIndex < fileHandles.length; fileIndex++) {
+        const file = await fileHandles[fileIndex].getFile();
+        const buf = await file.arrayBuffer();
+
+        // エンコーディング検出: 未確定なら候補を順に試す / 確定後はそれのみ
+        const tryList = detectedEncoding ? [detectedEncoding] : preferredEncodings;
+        let decodedText = null;
+        for (const encoding of tryList) {
           try {
             const decoder = new TextDecoder(encoding, { fatal: false });
-            const decoded = decoder.decode(arrayBuffer);
-            
-            // デバッグ: デコード結果を確認
-            console.log(`🔍 ${file.name} - ${encoding}:`, {
-              textLength: decoded.length,
-              preview: decoded.substring(0, 50),
-              置換文字数: (decoded.match(/\uFFFD/g) || []).length
-            });
-            
-            // 区切り文字を検出（カンマ、タブ）
-            const commaCount = (decoded.match(/,/g) || []).length;
-            const tabCount = (decoded.match(/\t/g) || []).length;
-            const hasJapanese = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf]/.test(decoded);
-            const replacementCharCount = (decoded.match(/\uFFFD/g) || []).length;
-            const replacementRatio = replacementCharCount / decoded.length;
-            
-            // 判定: 区切り文字があり、日本語があり、置換文字が5%未満
+            const tmp = decoder.decode(buf);
+            const commaCount = (tmp.match(/,/g) || []).length;
+            const tabCount = (tmp.match(/\t/g) || []).length;
+            const hasJapanese = /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf]/.test(tmp);
+            const replacementCharCount = (tmp.match(/\uFFFD/g) || []).length;
+            const replacementRatio = replacementCharCount / Math.max(1, tmp.length);
+            console.log(`🔍 ${file.name} - ${encoding}`, { preview: tmp.substring(0, 50), commaCount, tabCount, replacementRatio });
             if ((commaCount > 0 || tabCount > 5) && hasJapanese && replacementRatio < 0.05) {
-              text = decoded;
+              decodedText = tmp;
               if (!detectedEncoding) {
                 detectedEncoding = encoding;
                 console.log(`✅ エンコーディング決定: ${encoding}`);
               }
-              console.log(`${file.name}: ${encoding} で読み取り成功 (タブ:${tabCount}, カンマ:${commaCount})`);
               break;
             }
           } catch (e) {
             console.warn(`${encoding} デコード失敗:`, e);
           }
         }
-
-        if (!text) {
-          console.warn(`${file.name}: 読み取りに失敗しました`);
+        if (!decodedText) {
+          console.warn(`${file.name}: 適切なエンコーディングで読み取れませんでした (スキップ)`);
           continue;
         }
 
-        const lines = text.split(/\r?\n/).filter(line => line.trim());
-        
+        const lines = decodedText.split(/\r?\n/).filter(l => l.trim().length > 0);
         if (lines.length === 0) continue;
 
-        // 最初のファイルのヘッダーを保存
-        if (!header) {
-          header = lines[0];
-          allLines.push(...lines);
-        } else {
-          // 2ファイル目以降はヘッダーをスキップ
-          allLines.push(...lines.slice(1));
-        }
-      }
-
-      if (allLines.length === 0) {
-        alert('結合できるデータがありませんでした');
-        triggerBtn.textContent = originalText;
-        triggerBtn.disabled = false;
-        return;
-      }
-
-      // 🆕 全ファイルを正しくデコードしてUTF-8で結合
-      const mergedLines = [];
-      
-      for (let i = 0; i < fileHandles.length; i++) {
-        const file = await fileHandles[i].getFile();
-        const arrayBuffer = await file.arrayBuffer();
-        
-        // 検出されたエンコーディングでデコード
-        const decoder = new TextDecoder(detectedEncoding || 'utf-16le', { fatal: false });
-        const text = decoder.decode(arrayBuffer);
-        
-        // 行に分割（空行を除外）
-        const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
-        
-        if (lines.length === 0) continue;
-        
-        // 🆕 タブ区切りをカンマ区切りに変換
-        const convertedLines = lines.map(line => {
-          // タブをカンマに置き換え
-          // ただし、フィールド内にカンマが含まれる場合はダブルクォートで囲む
-          const fields = line.split('\t');
-          const csvFields = fields.map(field => {
-            // フィールドにカンマ、ダブルクォート、改行が含まれる場合はダブルクォートで囲む
-            if (field.includes(',') || field.includes('"') || field.includes('\n') || field.includes('\r')) {
-              // ダブルクォートをエスケープ（""に置換）
-              const escaped = field.replace(/"/g, '""');
-              return `"${escaped}"`;
+        // タブ→カンマ + quoting
+        const converted = lines.map(line => {
+          const fields = line.split('\t').map(f => {
+            if (/[",\n\r]/.test(f)) {
+              return '"' + f.replace(/"/g, '""') + '"';
             }
-            return field;
+            return f;
           });
-          return csvFields.join(',');
+          return fields.join(',');
         });
-        
-        if (i === 0) {
-          // 最初のファイルは全行
-          mergedLines.push(...convertedLines);
+
+        if (fileIndex === 0) {
+          mergedLines.push(...converted); // ヘッダー含む
         } else {
-          // 2ファイル目以降はヘッダーをスキップ
-          mergedLines.push(...convertedLines.slice(1));
+          mergedLines.push(...converted.slice(1)); // 2つ目以降はヘッダー除外
         }
       }
-      
+
       if (mergedLines.length === 0) {
         alert('結合できるデータがありませんでした');
-        triggerBtn.textContent = originalText;
-        triggerBtn.disabled = false;
+        if (triggerBtn) {
+          triggerBtn.textContent = originalText;
+          triggerBtn.disabled = false;
+        }
         return;
       }
-      
+
       const mergedText = mergedLines.join('\n');
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const safeSubject = subject.replace(/[\\/\:\*\?"<>\|]/g, '_').slice(0, 120);
       const filename = `${safeSubject}_merged_${timestamp}.csv`;
       
       // 🆕 BOM付きUTF-8として保存（シンプルに）
-      console.log(`保存: UTF-8 with BOM (元: ${detectedEncoding || 'shift_jis'})`);
+      console.log(`保存: UTF-8 with BOM (元: ${detectedEncoding || 'utf-16le'})`);
       const bom = '\uFEFF';
       const blob = new Blob([bom + mergedText], { type: 'text/plain;charset=utf-8' });
       
@@ -828,13 +857,14 @@
         プレビュー: mergedLines[0]?.substring(0, 50)
       });
 
-      triggerBtn.textContent = `✅ ${fileHandles.length}件`;
-      setTimeout(() => {
-        triggerBtn.textContent = originalText;
-        triggerBtn.disabled = false;
-      }, 2000);
-
-      alert(`${fileHandles.length}個のファイルを結合しました!\n合計: ${allLines.length}行\nファイル名: ${filename}`);
+      if (triggerBtn) {
+        triggerBtn.textContent = `✅ ${fileHandles.length}件`;
+        setTimeout(() => {
+          triggerBtn.textContent = originalText;
+          triggerBtn.disabled = false;
+        }, 2000);
+      }
+      alert(`${fileHandles.length}個のファイルを結合しました!\n合計: ${mergedLines.length}行\nファイル名: ${filename}`);
 
     } catch (err) {
       if (err.name === 'AbortError') {
@@ -843,8 +873,10 @@
         console.error('ファイル結合エラー:', err);
         alert('ファイル結合に失敗しました: ' + err.message);
       }
-      triggerBtn.textContent = '結合';
-      triggerBtn.disabled = false;
+      if (triggerBtn) {
+        triggerBtn.textContent = '結合';
+        triggerBtn.disabled = false;
+      }
     }
   }
 
@@ -1004,6 +1036,13 @@
       triggerButton.textContent = originalText;
       triggerButton.disabled = false;
     }, 1200);
+
+    // ダウンロード後に結合ファイル選択ダイアログ誘導オーバーレイ表示
+    try {
+      showAutoMergePrompt(subject);
+    } catch (e) {
+      console.warn('自動結合プロンプト表示失敗（フォールバック: 手動で結合ボタンを押してください）', e);
+    }
 
     if (errors.length > 0) {
       alert(`一部のファイルで取得エラーがありました:\n${errors.join('\n')}`);
