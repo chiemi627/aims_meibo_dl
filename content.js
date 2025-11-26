@@ -1,133 +1,99 @@
+  // テキストデータをUTF-8でファイル保存する
+  function downloadTextAsFile(text, filename, mime = 'text/csv;charset=utf-8;') {
+    const safe = filename.replace(/[\\/:*?"<>|]/g, '_').slice(0, 120);
+    const bom = '\uFEFF';
+    const blob = new Blob([bom + text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = safe;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+    return true;
+  }
+  
+  // Blobをファイルとしてダウンロードする
+  function downloadBlob(blob, filename) {
+    const safe = filename.replace(/[\\/:*?"<>|]/g, '_').slice(0, 120);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = safe;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+  }
+  
+  // ファイル名を安全な形式にする
+  function sanitizeForFilename(filename) {
+    return filename.replace(/[\\/:*?"<>|]/g, '_').slice(0, 120);
+  }
+  // Blobダウンロード完了を示す特殊値
+  const BLOB_DOWNLOADED = '__blob_downloaded__';
+  // グループ（行配列）から授業コード等を抽出
+  function extractDataFromGroup(groupRows) {
+    if (!groupRows || groupRows.length === 0) return null;
+    // メイン行（tdが3つ以上）を探す
+    const mainRow = groupRows.find(r => r.querySelectorAll('td').length >= 3);
+    if (!mainRow) return null;
+    const cells = mainRow.querySelectorAll('td');
+    return {
+      classCode: cells[0]?.textContent.trim() || '',
+      subject: cells[2]?.textContent.trim() || '',
+      // 必要なら他の情報も追加可能
+    };
+  }
 // ページが読み込まれたら授業科目名でソート機能を追加
 (function() {
+
+  // localStorageキーの接頭辞
+  const STORAGE_PREFIX = 'ntutdx1_';
+
   console.log('ソート機能拡張機能が実行されました');
   
+
   // テーブルを検索
   const tables = document.querySelectorAll('table');
-  
-  if (tables.length === 0) {
-    console.log('テーブルが見つかりませんでした');
-    return;
-  }
-  
-  // 最初のテーブルを対象にする(必要に応じて変更可能)
-  let targetTable = tables[0];
-  
-  // 複数テーブルがある場合、最も大きなテーブルを選択
-  if (tables.length > 1) {
-    targetTable = Array.from(tables).reduce((largest, current) => {
-      const largestRows = largest.querySelectorAll('tr').length;
-      const currentRows = current.querySelectorAll('tr').length;
-      return currentRows > largestRows ? current : largest;
-    });
-  }
-  
-  console.log('対象テーブル:', targetTable);
-  
-
-  // ------------------
-  // Helper: filename sanitize and download helpers
-  function sanitizeForFilename(name, maxLen = 120) {
-    if (!name) return 'download';
-    return String(name).replace(/[\\/\:\*\?"<>\|]/g, '_').slice(0, maxLen);
-  }
-
-  function downloadBlob(blob, filename) {
-    try {
-      const safe = sanitizeForFilename(filename);
-      // duplicate guard
-      if (typeof downloadedSet !== 'undefined' && downloadedSet.has(safe)) {
-        console.log('downloadBlob: skip already-downloaded file', safe);
-        return false;
-      }
-      if (typeof downloadedSet !== 'undefined') downloadedSet.add(safe);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = safe;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      return true;
-    } catch (e) {
-      console.error('downloadBlob failed', e);
+  // 操作対象テーブル（最初のテーブルを仮定）
+  // 科目一覧テーブルを探す（最初のテーブルが想定外の場合は他も検査）
+  let targetTable = null;
+  for (let t of tables) {
+    if (t.textContent.includes('授業コード')) {
+      targetTable = t;
+      break;
     }
   }
-
-  function downloadTextAsFile(text, filename, mime = 'text/csv;charset=utf-8;') {
-    const blob = new Blob([text], { type: mime });
-    return downloadBlob(blob, filename);
+  if (!targetTable) {
+    console.warn('科目一覧テーブルが見つかりません。UIを非表示にします。');
+    subjectList.style.display = 'none';
+    return;
   }
 
-  // sentinel returned when fetchCsvFromGroup already triggered a blob download
-  const BLOB_DOWNLOADED = '__BLOB_DOWNLOADED__';
-  // set to track filenames already downloaded in this session
-  const downloadedSet = new Set();
-  
-   
-  // document.body.appendChild(fetchAllButton);
-
-  // --- 科目別ダウンロード機能を追加 ---
-  // 科目ごとのボタンを表示するパネルを作成
-  const subjectPanel = document.createElement('div');
-  subjectPanel.style.position = 'fixed';
-  subjectPanel.style.top = '130px';
-  subjectPanel.style.right = '20px';
-  subjectPanel.style.maxHeight = '60vh';
-  subjectPanel.style.overflow = 'auto';
-  subjectPanel.style.background = 'rgba(255,255,255,0.95)';
-  subjectPanel.style.border = '1px solid #ddd';
-  subjectPanel.style.padding = '10px';
-  subjectPanel.style.borderRadius = '8px';
-  subjectPanel.style.boxShadow = '0 4px 10px rgba(0,0,0,0.08)';
-  subjectPanel.style.zIndex = '10000';
-  subjectPanel.style.minWidth = '220px';
-
-  const subjectTitle = document.createElement('div');
-  subjectTitle.textContent = '科目別ダウンロード';
-  subjectTitle.style.fontWeight = 'bold';
-  subjectTitle.style.marginBottom = '8px';
-  subjectPanel.appendChild(subjectTitle);
-
-  const refreshSubjectsBtn = document.createElement('button');
-  refreshSubjectsBtn.textContent = '🔄 更新';
-  refreshSubjectsBtn.style.marginBottom = '8px';
-  refreshSubjectsBtn.style.display = 'block';
-  refreshSubjectsBtn.style.width = '100%';
-  refreshSubjectsBtn.onclick = buildSubjectButtons;
-  subjectPanel.appendChild(refreshSubjectsBtn);
-
-  const subjectList = document.createElement('div');
-  subjectPanel.appendChild(subjectList);
-
-  document.body.appendChild(subjectPanel);
-
-  // localStorage関連のユーティリティ
-  const STORAGE_PREFIX = 'ntut_subject_data_';
-  
-  // groupRows から データ配列に変換
-  function extractDataFromGroup(grp) {
-    const mainRow = grp.find(r => r.querySelectorAll('td').length >= 3);
-    if (!mainRow) return null;
-    
-    const cells = mainRow.querySelectorAll('td');
-    
-    const data = {
-      classCode: cells[0]?.textContent.trim() || '',
-      班: cells[1]?.textContent.trim() || '',
-      科目名: cells[2]?.textContent.trim() || '',
-      単位: cells[3]?.textContent.trim() || '',
-      必選: cells[4]?.textContent.trim() || '',
-      年次: cells[5]?.textContent.trim() || '',
-      学期: cells[6]?.textContent.trim() || '',
-      曜日: cells[7]?.textContent.trim() || '',
-      時限: cells[8]?.textContent.trim() || '',
-      教室: cells[9]?.textContent.trim() || '',
-      担当教員: cells[10]?.textContent.trim() || ''
-    };
-    return data;
+  // 科目ボタン表示用の要素を生成・追加
+  let subjectList = document.getElementById('subject-list');
+  if (!subjectList) {
+    subjectList = document.createElement('div');
+    subjectList.id = 'subject-list';
+    subjectList.style.margin = '32px 0';
+    subjectList.style.padding = '16px';
+    subjectList.style.background = '#fafafa';
+    subjectList.style.borderRadius = '8px';
+    subjectList.style.boxShadow = '0 2px 8px rgba(0,0,0,0.04)';
+    if (targetTable && targetTable.parentNode) {
+      targetTable.parentNode.insertBefore(subjectList, targetTable);
+    } else {
+      document.body.prepend(subjectList);
+    }
   }
+  
+  // ...existing code...
   
   // localStorage に科目データを保存（重複排除あり）
   function saveToLocalStorage(subject, groupsForSubject) {
@@ -249,17 +215,21 @@
     const tbody = targetTable.querySelector('tbody') || targetTable;
     const rows = Array.from(tbody.querySelectorAll('tr'));
 
-    // ヘッダーを探す
+    // ヘッダーを探す（「授業コード」以外にも柔軟に対応）
     let headerIndex = -1;
     for (let i = 0; i < rows.length; i++) {
       const firstCell = rows[i].querySelector('th, td');
-      if (firstCell && firstCell.textContent.trim() === '授業コード') {
+      if (firstCell && /授業コード|科目名|学生番号|氏名/.test(firstCell.textContent.trim())) {
         headerIndex = i;
         break;
       }
     }
 
-    if (headerIndex === -1) return;
+    if (headerIndex === -1) {
+      console.warn('テーブルヘッダー（授業コード等）が見つかりません。UIを非表示にします。');
+      subjectList.style.display = 'none';
+      return;
+    }
 
     // データ行から科目名を収集(3列目)
     // メイン行(授業情報)と、その直後に続くボタン行をセットで収集する
@@ -348,7 +318,7 @@
       btnContainer.style.flex = '0 0 auto';
 
       const downloadBtn = document.createElement('button');
-      downloadBtn.textContent = '全てDL';
+      downloadBtn.textContent = 'ダウンロード';
       downloadBtn.style.fontSize = '11px';
       downloadBtn.style.padding = '2px 6px';
       downloadBtn.onclick = () => handleSubjectDownload(subject, groupsForSubject, downloadBtn);
@@ -357,79 +327,6 @@
 
       wrapper.appendChild(label);
       wrapper.appendChild(btnContainer);
-      
-      // 🆕 localStorage から保存データを取得して、現在のページデータとマージ
-      let allClassCodes = new Map(); // classCode -> grp (DOM要素)
-      
-      // 現在のページのデータを追加（DOM要素を保持）
-      groupsForSubject.forEach(grp => {
-        const data = extractDataFromGroup(grp);
-        if (data && data.classCode) {
-          allClassCodes.set(data.classCode, grp);
-        }
-      });
-      
-      // localStorageのデータから授業コードリストを追加（DOM要素なし）
-      if (stored) {
-        try {
-          const storedData = JSON.parse(stored);
-          storedData.forEach(data => {
-            if (data && data.classCode && !allClassCodes.has(data.classCode)) {
-              allClassCodes.set(data.classCode, null); // localStorage由来はnull
-            }
-          });
-        } catch (e) {
-          console.error('localStorage読み込みエラー:', e);
-        }
-      }
-      
-      // 各グループ（授業コード）ごとの小さなボタンを追加
-      const groupList = document.createElement('div');
-      groupList.style.display = 'flex';
-      groupList.style.flexDirection = 'column';
-      groupList.style.marginTop = '6px';
-      
-      // 全ての授業コード（現在ページ + localStorage）に対してボタンを生成
-      allClassCodes.forEach((grp, classCode) => {
-        const sub = document.createElement('div');
-        sub.style.display = 'flex';
-        sub.style.justifyContent = 'space-between';
-        sub.style.marginTop = '2px';
-        
-        const subLabel = document.createElement('div');
-        subLabel.textContent = classCode;
-        subLabel.style.fontSize = '12px';
-        subLabel.style.flex = '1';
-        
-        const subBtn = document.createElement('button');
-        subBtn.textContent = 'DL';
-        subBtn.style.flex = '0 0 auto';
-        subBtn.title = `${subject} - ${classCode}`;
-        
-        // 現在のページに存在する場合のみダウンロード可能
-        if (grp) {
-          subBtn.onclick = async () => {
-            subBtn.disabled = true;
-            try {
-              await downloadGroup(subject, grp, subBtn);
-            } catch (e) {
-              console.error('個別グループのダウンロード失敗', e);
-              alert(`ダウンロードに失敗しました: ${e.message || e}`);
-            }
-            subBtn.disabled = false;
-          };
-        } else {
-          // localStorage由来（現在のページにない）場合は無効化
-          subBtn.disabled = true;
-          subBtn.style.opacity = '0.5';
-          subBtn.title = `${subject} - ${classCode} (このページにはありません)`;
-        }
-        
-        sub.appendChild(subLabel);
-        sub.appendChild(subBtn);
-        groupList.appendChild(sub);
-      });
-      wrapper.appendChild(groupList);
       subjectList.appendChild(wrapper);
     });
     
@@ -872,6 +769,7 @@
     const originalText = triggerButton.textContent;
     triggerButton.textContent = '取得中...';
     const errors = [];
+    
     // rowsForSubject may already be an array of groups (each group is an array of rows).
     let groups = [];
     if (rowsForSubject.length > 0 && Array.isArray(rowsForSubject[0])) {
@@ -892,78 +790,82 @@
       }
       if (temp.length > 0) groups.push(temp);
     }
+    
+    // グループ分割状況をログ出力
+    console.log(`[handleSubjectDownload] subject='${subject}' グループ数:`, groups.length);
+    groups.forEach((groupRows, idx) => {
+      const mainCells = groupRows.find(r => r.querySelectorAll('td').length >= 3)?.querySelectorAll('td');
+      const classCode = (mainCells && mainCells[0] && mainCells[0].textContent.trim()) || (`${idx+1}`);
+      console.log(`  group[${idx}]: classCode='${classCode}' rows=${groupRows.length}`);
+    });
 
-    // 各グループごとに個別のファイルとしてダウンロードする実装
+    // 🆕 各グループのデータを取得して結合する
+    const mergedLines = [];
+    const classCodes = [];
+    
     for (let g = 0; g < groups.length; g++) {
       const groupRows = groups[g];
       try {
+        triggerButton.textContent = `取得中 ${g+1}/${groups.length}...`;
+        
         // まず fetch を試みてテキストを取得できるか確認する
         const respText = await fetchCsvFromGroup(groupRows);
         if (respText === BLOB_DOWNLOADED) {
           console.log('handleSubjectDownload: fetchCsvFromGroup は Blob をダウンロードしました（スキップ）');
-          // 既にダウンロード済みなので次のグループへ
           await new Promise(res => setTimeout(res, 300));
           continue;
         }
+        
         // main 行から科目コードを取得
         const mainCells = groupRows.find(r => r.querySelectorAll('td').length >= 3).querySelectorAll('td');
         const classCode = (mainCells && mainCells[0] && mainCells[0].textContent.trim()) || (`${g+1}`);
-        const safeSubject = subject.replace(/[\\/\:\*\?"<>\|]/g, '_').slice(0, 120);
 
         if (respText && respText.trim().length > 0) {
-          // テキストとして取得できた -> 個別ファイルを作ってダウンロード
-          const filename = `${safeSubject}_${classCode}.csv`;
-          const wrote = downloadTextAsFile(respText, filename);
-          // 少し待つ
-          await new Promise(res => setTimeout(res, 300));
-          if (wrote === false) {
-            console.log('handleSubjectDownload: ファイルは既にダウンロード済み。次へ', filename);
-            continue;
+          // テキストとして取得できた -> データを結合用配列に追加
+          classCodes.push(classCode);
+          
+          const lines = respText.split(/\r?\n/).filter(l => l.trim().length > 0);
+          if (lines.length === 0) continue;
+          
+          if (mergedLines.length === 0) {
+            // 最初のグループ: ヘッダー含む全行を追加
+            mergedLines.push(...lines);
+          } else {
+            // 2つ目以降: ヘッダーを除いてデータ行のみ追加
+            mergedLines.push(...lines.slice(1));
           }
+          
+          console.log(`✅ ${classCode}: ${lines.length}行取得`);
+          await new Promise(res => setTimeout(res, 300));
           continue;
         }
 
-        // テキストが取れなかった場合: fetchCsvFromGroup 内で fallback として downloadResponseBlob(resp,..) を行っている可能性がある。
-        // それでも何も起きていない場合は、ボタンをクリックしてブラウザの通常ダウンロードをトリガする
-        let handled = false;
-        // find first input[type=image]
-        let imgBtn = null;
-        for (const r of groupRows) { imgBtn = imgBtn || r.querySelector('input[type="image"]'); }
-        if (imgBtn) {
-          imgBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-          handled = true;
-        }
-        if (!handled) {
-          for (const r of groupRows) {
-            const anchors = r.querySelectorAll('a[href^="javascript:"]');
-            for (const a of anchors) {
-              const href = a.getAttribute('href');
-              if (href && href.includes('__doPostBack')) {
-                const m = href.match(/__doPostBack\(['"]([^'"\)]+)['"],\s*['"]([^'"\)]*)['"]\)/i);
-                if (m && typeof window.__doPostBack === 'function') {
-                  window.__doPostBack(m[1], m[2] || '');
-                  handled = true;
-                  break;
-                }
-              }
-            }
-            if (handled) break;
-          }
-        }
-        if (!handled) {
-          for (const r of groupRows) {
-            const btn = r.querySelector('button, input[type="button"]');
-            if (btn) {
-              btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-              handled = true; break;
-            }
-          }
-        }
-        if (handled) await new Promise(res => setTimeout(res, 800));
+        // テキストが取れなかった場合のフォールバック
+        console.warn(`⚠️ ${classCode}: テキスト取得失敗、スキップ`);
+        errors.push(`${classCode}: データ取得に失敗しました`);
+        
       } catch (err) {
         console.error('グループのCSV取得失敗:', err);
         errors.push(err.message || String(err));
       }
+    }
+
+    // 🆕 結合したデータを1つのファイルとして保存
+    if (mergedLines.length > 0) {
+      triggerButton.textContent = '保存中...';
+      
+      const safeSubject = subject.replace(/[\\/\:\*\?"<>\|]/g, '_').slice(0, 80);
+      // ファイル名: 科目名_科目コード1_科目コード2_..._科目コードN.csv
+      const classCodesStr = classCodes.join('_');
+      const filename = `${safeSubject}_${classCodesStr}.csv`;
+      
+      const mergedText = mergedLines.join('\n');
+      downloadTextAsFile(mergedText, filename);
+      
+      console.log(`✅ 結合完了: ${classCodes.length}グループ、${mergedLines.length}行 -> ${filename}`);
+    } else {
+      console.warn('⚠️ 結合するデータがありません');
+      errors.push('結合するデータがありませんでした');
     }
 
     triggerButton.textContent = '完了 ✅';
@@ -972,11 +874,13 @@
       triggerButton.disabled = false;
     }, 1200);
 
-    // ダウンロード後に結合ファイル選択ダイアログ誘導オーバーレイ表示
-    try {
-      showAutoMergePrompt(subject);
-    } catch (e) {
-      console.warn('自動結合プロンプト表示失敗（フォールバック: 手動で結合ボタンを押してください）', e);
+    // 🆕 ダウンロード後に結合ファイル選択ダイアログ誘導オーバーレイ表示
+    if (mergedLines.length > 0) {
+      try {
+        showAutoMergePrompt(subject);
+      } catch (e) {
+        console.warn('自動結合プロンプト表示失敗', e);
+      }
     }
 
     if (errors.length > 0) {
@@ -1151,10 +1055,15 @@
     // clone for reading
     const respForText = resp.clone();
     try {
-      return await responseToText(respForText);
+      console.log('postFormClickFetch: responseToText を呼び出します、status=', resp.status, 'content-type=', resp.headers.get('content-type'));
+      const result = await responseToText(respForText);
+      console.log('postFormClickFetch: responseToText 成功、テキスト長=', result.length);
+      return result;
     } catch (e) {
+      console.error('postFormClickFetch: responseToText で失敗しました', e.message);
       try { await downloadResponseBlob(resp, 'postback'); } catch(_){}
       const res = await downloadResponseBlob(resp, 'postback');
+      console.log('postFormClickFetch: Blob 保存結果 =', res);
       if (res === BLOB_DOWNLOADED) return BLOB_DOWNLOADED;
       return '';
     }
@@ -1196,9 +1105,12 @@
       console.log('postBackFetch: response status=', resp.status, 'content-type=', resp.headers.get('content-type'), 'content-disposition=', resp.headers.get('content-disposition'));
       // clone before passing to responseToText so we keep an untouched original for probing/downloading
       const respForText = resp.clone();
-      return await responseToText(respForText);
+      console.log('postBackFetch: responseToText を呼び出します');
+      const result = await responseToText(respForText);
+      console.log('postBackFetch: responseToText 成功、テキスト長=', result.length);
+      return result;
     } catch (e) {
-      console.error('postBackFetch: responseToText で失敗しました', e);
+      console.error('postBackFetch: responseToText で失敗しました', e.message);
       try {
         // try to peek first bytes for debugging from the original response (still unused)
         let probeText = null;
@@ -1236,9 +1148,11 @@
   // fetchのResponseを安全にテキストへ変換する。text/ csv の場合はtext()を使い、それ以外はblob->text()を試す
   async function responseToText(resp) {
     const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+    console.log('responseToText: Content-Type =', contentType);
 
     // PDF 応答は早期に拒否する（PDF を CSV として扱わない）
     if (contentType.includes('pdf')) {
+      console.log('responseToText: PDF検出、拒否');
       throw new Error('サーバがPDFを返しました');
     }
 
@@ -1259,14 +1173,23 @@
     try {
       // サーバが text/csv を明示している場合は text() で読み取る
       if (contentType.includes('text') || contentType.includes('csv') || contentType.includes('application/json')) {
+        console.log('responseToText: Content-Typeがtext/csv系なので resp.text() を使用');
         const txt = await resp.text();
-        if (/<\s*html/i.test(txt)) throw new Error('サーバがHTMLを返しました（認証切れやエラーページの可能性があります）');
+        console.log('responseToText: resp.text() 取得成功、長さ=', txt.length, '先頭100文字=', txt.slice(0, 100));
+        if (/<\s*html/i.test(txt)) {
+          console.log('responseToText: HTML検出、エラー');
+          throw new Error('サーバがHTMLを返しました（認証切れやエラーページの可能性があります）');
+        }
+        console.log('responseToText: テキスト返却（resp.text経由）');
         return txt;
       }
 
       // それ以外はバイナリとして読み、複数エンコーディングでデコードして最もCSVらしい結果を返す
+      console.log('responseToText: Content-Typeが不明またはバイナリ、複数エンコーディングを試行');
       const buffer = await resp.arrayBuffer();
-      const tryEncodings = ['utf-8', 'shift_jis', 'euc-jp'];
+      console.log('responseToText: arrayBuffer取得、サイズ=', buffer.byteLength);
+      // UTF-16LE/BE を優先的に試す（TSV形式の可能性が高いため）
+      const tryEncodings = ['utf-16le', 'utf-16be', 'shift_jis', 'utf-8', 'euc-jp'];
       const candidates = [];
 
       for (const enc of tryEncodings) {
@@ -1275,32 +1198,54 @@
           const text = dec.decode(buffer);
           let score = 0;
           if (/\b(学籍|学籍番号|氏名|出席|学生|学生番号|出席番号|名前|所属)\b/.test(text)) score += 50;
+          // TSV対応: タブ文字もカウント（カンマ区切りとタブ区切りの両方に対応）
           score += (text.match(/,/g) || []).length;
+          score += (text.match(/\t/g) || []).length;
           if (/\<\s*html/i.test(text)) score -= 1000;
-          candidates.push({ enc, text, score });
+          const replacementCount = (text.match(/\uFFFD/g) || []).length;
+          // 置換文字がある場合は大幅に減点（1文字あたり -10点）
+          score -= replacementCount * 10;
+          console.log(`responseToText: エンコーディング=${enc}, スコア=${score}, 置換文字数=${replacementCount}, 長さ=${text.length}`);
+          candidates.push({ enc, text, score, replacementCount });
         } catch (e) {
+          console.log(`responseToText: エンコーディング=${enc} でデコード失敗`, e);
           // ignore
         }
       }
 
       candidates.sort((a, b) => b.score - a.score);
-      if (candidates.length === 0) throw new Error('レスポンスをテキストに変換できませんでした（対応エンコーディングなし）');
+      if (candidates.length === 0) {
+        console.log('responseToText: すべてのエンコーディングで失敗');
+        throw new Error('レスポンスをテキストに変換できませんでした（対応エンコーディングなし）');
+      }
       const best = candidates[0];
+      console.log('responseToText: 最良候補 =', best.enc, 'スコア=', best.score, '置換文字数=', best.replacementCount);
       // デコード結果に置換文字(U+FFFD)が含まれる場合は、バイナリ誤解釈の可能性があるため失敗扱いにする
-      const replacementCount = (best.text.match(/\uFFFD/g) || []).length;
-      if (replacementCount > 0) {
+      if (best.replacementCount > 0) {
+        console.log('responseToText: 置換文字を検出、エラー');
         throw new Error('デコードに失敗しました（置換文字を検出）');
       }
-      if (/\<\s*html/i.test(best.text)) throw new Error('サーバがHTMLを返しました（認証切れやエラーページの可能性があります）');
+      if (/\<\s*html/i.test(best.text)) {
+        console.log('responseToText: HTML検出、エラー');
+        throw new Error('サーバがHTMLを返しました（認証切れやエラーページの可能性があります）');
+      }
+      console.log('responseToText: テキスト返却（複数エンコーディング経由、先頭100文字=', best.text.slice(0, 100), ')');
       return best.text;
     } catch (e) {
+      console.log('responseToText: メイン処理で例外、フォールバック blob.text() を試行', e.message);
       // フォールバック: blob.text()
       try {
         const blob = await resp.blob();
         const txt = await blob.text();
-        if (/\<\s*html/i.test(txt)) throw new Error('サーバがHTMLを返しました（認証切れやエラーページの可能性があります）');
+        console.log('responseToText: blob.text() 成功、長さ=', txt.length);
+        if (/\<\s*html/i.test(txt)) {
+          console.log('responseToText: blob.text() でHTML検出、エラー');
+          throw new Error('サーバがHTMLを返しました（認証切れやエラーページの可能性があります）');
+        }
+        console.log('responseToText: テキスト返却（blob.text経由）');
         return txt;
       } catch (e2) {
+        console.error('responseToText: blob.text() も失敗、完全にエラー', e2.message);
         throw new Error('レスポンスをテキストに変換できませんでした');
       }
     }
