@@ -1,6 +1,12 @@
 # 履修者データダウンロード＆出欠テンプレート作成 Chrome拡張機能
 
-筑波技術大学AIMSの履修者名簿ダウンロードページで、科目別のデータダウンロードと出欠管理用テンプレート作成を効率化するChrome拡張機能です。
+筑波技術大学教務システムAIMSの履修者名簿ダウンロードページで、科目別のデータダウンロードと出欠管理用テンプレート作成を効率化するChrome拡張機能です。
+
+> **⚠️ 免責事項**
+> - これは個人が開発した非公式ツールです。筑波技術大学の公式ツールではありません。
+> - 本ツールの使用は自己責任でお願いします。
+> - データの正確性については、必ず元のシステムと照合してください。
+> - 大学の規定に反する使用はしないでください。
 
 ## 主な機能
 
@@ -28,7 +34,7 @@
 1. Chromeで `chrome://extensions/` を開く
 2. 右上の「デベロッパーモード」をオンにする
 3. 「パッケージ化されていない拡張機能を読み込む」をクリック
-4. このフォルダ(`ntut_dx1`)を選択
+4. このフォルダ(`aims_meibo_dl`)を選択
 
 ## 使い方
 
@@ -78,7 +84,6 @@
 - 重複排除機能あり
 
 ## ファイル構成
-
 - `manifest.json`: Chrome拡張機能の設定ファイル
 - `content.js`: メインスクリプト（1600行以上）
 - `README.md`: このファイル
@@ -91,6 +96,13 @@
 
 ## 注意事項
 
+### 使用上の注意
+- **学内システム専用**: このツールは筑波技術大学AIMS専用です
+- **認証が必要**: 大学のシステムにログインしている状態でのみ動作します
+- **個人情報の取り扱い**: ダウンロードしたファイルには学生の個人情報が含まれます。適切に管理してください
+- **データの確認**: 生成されたデータは必ず元のシステムと照合してください
+
+### 技術的な制限
 - 履修者データの列構造が変更された場合、正しく動作しない可能性があります
 - File System Access APIはHTTPSまたはlocalhostでのみ動作します
 - ブラウザによってはファイル選択ダイアログがサポートされていない場合があります
@@ -110,3 +122,39 @@
 - エンコーディング自動検出
 - ファイル結合機能
 
+## ライセンス
+
+MIT License
+
+Copyright (c) 2025
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## 開発者向け情報
+
+### 貢献について
+バグ報告や機能提案は、GitHubのIssuesでお願いします。
+プルリクエストも歓迎します。
+
+### ローカル開発
+```bash
+git clone https://github.com/chiemi627/aims_meibo_dl.git
+cd aims_meibo_dl
+# Chrome拡張機能としてこのディレクトリを読み込む
+```
