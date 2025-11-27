@@ -1592,8 +1592,8 @@
     const month = now.getMonth() + 1;
     const fiscalYear = (month >= 1 && month <= 3) ? year - 1 : year;
     
-    // 本日の日付（YYYY/MM/DD形式）
-    const today = `${year}/${String(month).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}`;
+    // 本日の日付（YYYYMMDD形式）
+    const today = `${year}${String(month).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
 
     // 出欠テンプレートのヘッダー（カンマ区切りCSV形式）
     const templateHeader = '年度,授業コード,授業名,出欠登録日,時限,学籍番号,学生氏名,学年,出席番号,出席,欠席,公欠,出席停止,未調査,備考';
