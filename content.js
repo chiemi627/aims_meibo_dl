@@ -1559,25 +1559,8 @@
     triggerButton.textContent = '取得中...';
     const errors = [];
     
-    // グループ化処理（handleSubjectDownloadと同様）
-    let groups = [];
-    if (rowsForSubject.length > 0 && Array.isArray(rowsForSubject[0])) {
-      groups = rowsForSubject;
-    } else {
-      groups = [];
-      let temp = [];
-      for (let idx = 0; idx < rowsForSubject.length; idx++) {
-        const r = rowsForSubject[idx];
-        const cells = r.querySelectorAll('td');
-        if (cells.length >= 3 && cells[0].textContent.trim().match(/^\d/)) {
-          if (temp.length > 0) groups.push(temp);
-          temp = [r];
-        } else {
-          temp.push(r);
-        }
-      }
-      if (temp.length > 0) groups.push(temp);
-    }
+    // rowsForSubjectは Array<{classCode, groupRows}>
+    const groups = rowsForSubject;
 
     console.log(`[handleAttendanceTemplate] subject='${subject}' グループ数:`, groups.length);
 
@@ -1597,7 +1580,7 @@
 
     // 各グループのデータを取得してテンプレートに変換
     for (let g = 0; g < groups.length; g++) {
-      const groupRows = groups[g];
+      const groupRows = groups[g].groupRows;
       try {
         triggerButton.textContent = `取得中 ${g+1}/${groups.length}...`;
         
