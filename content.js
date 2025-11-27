@@ -107,7 +107,7 @@
       
       // 各グループを授業コードで重複チェック
       groupsForSubject.forEach(grp => {
-        const data = extractDataFromGroup(grp);
+        const data = extractDataFromGroup(grp.groupRows);
         if (!data || !data.classCode) return;
         
         // 既存データに同じ授業コードがあるかチェック
@@ -367,9 +367,11 @@
           break;
         }
 
-  if (!subjectMap.has(subject)) subjectMap.set(subject, []);
-  // groupRows を1つのグループとして追加（配列の配列にする）
-  subjectMap.get(subject).push(groupRows);
+        if (groupRows.length > 0) {
+          const classCode = cells[0]?.textContent.trim() || '';
+          if (!subjectMap.has(subject)) subjectMap.set(subject, []);
+          subjectMap.get(subject).push({ classCode, groupRows });
+        }
 
         // 進める
         i = j;
@@ -392,8 +394,8 @@
 
       // 🆕 localStorage から保存数を取得
       let storedCount = 0;
-      const key = STORAGE_PREFIX + subject;
-      const stored = localStorage.getItem(key);
+  const key = STORAGE_PREFIX + subject;
+  const stored = localStorage.getItem(key);
       if (stored) {
         try {
           const data = JSON.parse(stored);
@@ -430,7 +432,7 @@
       downloadBtn.style.borderRadius = '3px';
       downloadBtn.style.cursor = 'pointer';
       downloadBtn.style.whiteSpace = 'nowrap';
-      downloadBtn.onclick = () => handleSubjectDownload(subject, groupsForSubject, downloadBtn);
+  downloadBtn.onclick = () => handleSubjectDownload(subject, groupsForSubject, downloadBtn);
 
   btnContainer.appendChild(downloadBtn);
       // 🆕 出欠テンプレートボタン
@@ -444,7 +446,7 @@
       attendanceBtn.style.borderRadius = '3px';
       attendanceBtn.style.cursor = 'pointer';
       attendanceBtn.style.whiteSpace = 'nowrap';
-      attendanceBtn.onclick = () => handleAttendanceTemplate(subject, groupsForSubject, attendanceBtn);
+  attendanceBtn.onclick = () => handleAttendanceTemplate(subject, groupsForSubject, attendanceBtn);
 
       btnContainer.appendChild(attendanceBtn);
 
@@ -1770,81 +1772,53 @@
     triggerButton.textContent = '取得中...';
     const errors = [];
     
-    // rowsForSubject may already be an array of groups (each group is an array of rows).
-    let groups = [];
-    if (rowsForSubject.length > 0 && Array.isArray(rowsForSubject[0])) {
-      groups = rowsForSubject; // already grouped
-    } else {
-      // rowsForSubject contains raw rows; group them into main+button rows
-      groups = [];
-      let temp = [];
-      for (let idx = 0; idx < rowsForSubject.length; idx++) {
-        const r = rowsForSubject[idx];
-        const cells = r.querySelectorAll('td');
-        if (cells.length >= 3 && cells[0].textContent.trim().match(/^\d/)) {
-          if (temp.length > 0) groups.push(temp);
-          temp = [r];
-        } else {
-          temp.push(r);
-        }
-      }
-      if (temp.length > 0) groups.push(temp);
-    }
-    
+    // rowsForSubjectは Array<{classCode, groupRows}>
+    const subjectGroups = rowsForSubject;
     // グループ分割状況をログ出力
-    console.log(`[handleSubjectDownload] subject='${subject}' グループ数:`, groups.length);
-    groups.forEach((groupRows, idx) => {
-      const mainCells = groupRows.find(r => r.querySelectorAll('td').length >= 3)?.querySelectorAll('td');
-      const classCode = (mainCells && mainCells[0] && mainCells[0].textContent.trim()) || (`${idx+1}`);
-      const hasTokens = groupRows[0]?.dataset?.vs ? 'トークン有' : 'トークン無';
-      console.log(`  group[${idx}]: classCode='${classCode}' rows=${groupRows.length} ${hasTokens}`);
+    console.log(`[handleSubjectDownload] subject='${subject}' 科目番号数:`, subjectGroups.length);
+    subjectGroups.forEach((group, idx) => {
+      if (!group.groupRows || group.groupRows.length === 0) {
+        console.log(`  group[${idx}]: classCode='${group.classCode}' 空グループ スキップ`);
+        return;
+      }
+      const classCode = group.classCode;
+      const ds = group.groupRows[0].dataset || {};
+      console.log(`  group[${idx}]: classCode='${classCode}' rows=${group.groupRows.length} vsLen=${ds.vs ? ds.vs.length : 0} evLen=${ds.ev ? ds.ev.length : 0} vsg=${ds.vsg || ''}`);
     });
 
-    // 🆕 各グループのデータを取得して結合する
+    // 各科目番号ごとにデータを取得して結合
     const mergedLines = [];
     const classCodes = [];
-    
-    for (let g = 0; g < groups.length; g++) {
-      const groupRows = groups[g];
+    for (let g = 0; g < subjectGroups.length; g++) {
+      const group = subjectGroups[g];
+      if (!group.groupRows || group.groupRows.length === 0) {
+        console.log(`  group[${g}]: classCode='${group.classCode}' 空グループ スキップ`);
+        continue;
+      }
       try {
-        triggerButton.textContent = `取得中 ${g+1}/${groups.length}...`;
-        
-        // まず fetch を試みてテキストを取得できるか確認する
-        const respText = await fetchCsvFromGroup(groupRows);
+        triggerButton.textContent = `取得中 ${g+1}/${subjectGroups.length}...`;
+        const respText = await fetchCsvFromGroup(group.groupRows);
         if (respText === BLOB_DOWNLOADED) {
           console.log('handleSubjectDownload: fetchCsvFromGroup は Blob をダウンロードしました（スキップ）');
           await new Promise(res => setTimeout(res, 300));
           continue;
         }
-        
-        // main 行から科目コードを取得
-        const mainCells = groupRows.find(r => r.querySelectorAll('td').length >= 3).querySelectorAll('td');
-        const classCode = (mainCells && mainCells[0] && mainCells[0].textContent.trim()) || (`${g+1}`);
-
+        const classCode = group.classCode;
         if (respText && respText.trim().length > 0) {
-          // テキストとして取得できた -> データを結合用配列に追加
           classCodes.push(classCode);
-          
           const lines = respText.split(/\r?\n/).filter(l => l.trim().length > 0);
           if (lines.length === 0) continue;
-          
           if (mergedLines.length === 0) {
-            // 最初のグループ: ヘッダー含む全行を追加
             mergedLines.push(...lines);
           } else {
-            // 2つ目以降: ヘッダーを除いてデータ行のみ追加
             mergedLines.push(...lines.slice(1));
           }
-          
           console.log(`✅ ${classCode}: ${lines.length}行取得`);
           await new Promise(res => setTimeout(res, 300));
           continue;
         }
-
-        // テキストが取れなかった場合のフォールバック
         console.warn(`⚠️ ${classCode}: テキスト取得失敗、スキップ`);
         errors.push(`${classCode}: データ取得に失敗しました`);
-        
       } catch (err) {
         console.error('グループのCSV取得失敗:', err);
         errors.push(err.message || String(err));
@@ -1920,8 +1894,14 @@
     }
     console.group('[fetchCsvFromGroup] start');
     console.log('groupRows.length=', groupRows.length, 'expectedClassCode=', expectedClassCode);
+    // 1) 追加行（tr[data-page-appended]）を優先して処理
+    const sortedRows = [...groupRows].sort((a, b) => {
+      const aAppended = a.dataset && a.dataset.pageAppended === 'true';
+      const bAppended = b.dataset && b.dataset.pageAppended === 'true';
+      return (bAppended ? 1 : 0) - (aAppended ? 1 : 0);
+    });
     // 1) グループ内のアンカータグを探す
-    for (const row of groupRows) {
+    for (const row of sortedRows) {
       const anchors = row.querySelectorAll('a[href]');
       for (const a of anchors) {
         const href = a.getAttribute('href') || '';
@@ -2002,7 +1982,13 @@
       const imgBtn = row.querySelector('input[type="image"], input[type="submit"]');
       // PDF/印刷用の画像ボタンっぽければスキップ
       if (imgBtn && !looksLikePdfElement(imgBtn)) {
-        return await postFormClickFetch(imgBtn);
+        // トークンを渡す
+        const tokens = row.dataset ? {
+          vs: row.dataset.vs,
+          ev: row.dataset.ev,
+          vsg: row.dataset.vsg
+        } : undefined;
+        return await postFormClickFetch(imgBtn, tokens);
       }
 
   const btn = row.querySelector('input[type="button"], button');
@@ -2074,12 +2060,18 @@
   }
 
   // input[type=image] や input[type=submit] をフォーム送信としてエミュレートして fetch する
-  async function postFormClickFetch(elem) {
+  async function postFormClickFetch(elem, tokens) {
     const form = elem.closest('form') || document.querySelector('form');
     if (!form) throw new Error('フォームが見つかりません (画像ボタンのエミュレート失敗)');
 
     // フォームの全hidden値等をコピー
     const formData = new FormData(form);
+    // トークンが渡された場合は上書き
+    if (tokens) {
+      if (tokens.vs) formData.set('__VIEWSTATE', tokens.vs);
+      if (tokens.ev) formData.set('__EVENTVALIDATION', tokens.ev);
+      if (tokens.vsg) formData.set('__VIEWSTATEGENERATOR', tokens.vsg);
+    }
 
     // 画像ボタンは name.x / name.y を送るパターン
     const name = elem.getAttribute('name') || elem.getAttribute('id');
