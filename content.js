@@ -220,7 +220,49 @@
       }
     };
     
+    // 全ページ取得ボタン（ページネーションされている全科目を集約表示）
+    const loadAllBtn = document.createElement('button');
+    loadAllBtn.textContent = '全ページ取得';
+    loadAllBtn.style.flex = '0 0 auto';
+    loadAllBtn.style.padding = '8px 12px';
+    loadAllBtn.style.fontSize = '13px';
+    loadAllBtn.style.background = '#6A4BC3';
+    loadAllBtn.style.color = 'white';
+    loadAllBtn.style.border = 'none';
+    loadAllBtn.style.borderRadius = '4px';
+    loadAllBtn.style.cursor = 'pointer';
+    loadAllBtn.title = 'ページネーションされた全科目を1つの一覧に統合します';
+
+    loadAllBtn.onclick = async () => {
+      if (window.ntut_allPagesLoaded) {
+        alert('既に全ページを統合済みです');
+        return;
+      }
+      loadAllBtn.disabled = true;
+      const originalTxt = loadAllBtn.textContent;
+      loadAllBtn.textContent = '取得中...';
+      try {
+        const htmlPages = await fetchAllSubjectPages();
+        if (htmlPages.length <= 1) {
+          alert('追加ページがありませんでした');
+          loadAllBtn.textContent = originalTxt;
+          loadAllBtn.disabled = false;
+          return;
+        }
+        appendRowsFromPages(htmlPages.slice(1)); // 先頭は現行DOM
+        window.ntut_allPagesLoaded = true;
+        buildSubjectButtons();
+        loadAllBtn.textContent = '統合完了 ✅';
+      } catch (e) {
+        console.error('全ページ取得失敗:', e);
+        alert('全ページ取得に失敗しました: ' + (e.message || e));
+        loadAllBtn.textContent = originalTxt;
+        loadAllBtn.disabled = false;
+      }
+    };
+
     topControls.appendChild(statusDiv);
+    topControls.appendChild(loadAllBtn);
     topControls.appendChild(toggleBtn);
     topControls.appendChild(clearBtn);
     subjectList.appendChild(topControls);
@@ -370,8 +412,7 @@
       downloadBtn.style.whiteSpace = 'nowrap';
       downloadBtn.onclick = () => handleSubjectDownload(subject, groupsForSubject, downloadBtn);
 
-      btnContainer.appendChild(downloadBtn);
-
+  btnContainer.appendChild(downloadBtn);
       // 🆕 出欠テンプレートボタン
       const attendanceBtn = document.createElement('button');
       attendanceBtn.textContent = '出欠テンプレート';
@@ -402,6 +443,466 @@
     let totalCount = 0;
     allData.forEach(groups => { totalCount += groups.length; });
     console.log(`localStorage総保存数: ${totalCount}件 (${allData.size}科目)`);
+  }
+
+  // 全ページ分のHTMLを取得（ページネーション対応）
+  async function fetchAllSubjectPages() {
+    const form = document.querySelector('form');
+    if (!form) {
+      console.warn('fetchAllSubjectPages: formが見つかりません');
+      return [document.documentElement.innerHTML];
+    }
+    const firstHtml = document.documentElement.innerHTML;
+    // 既に統合済みなら現在のものだけ返す
+    if (window.ntut_allPagesLoaded) return [firstHtml];
+
+    // ページネーションリンクからターゲットと最大ページを抽出
+    const pageMatches = [...firstHtml.matchAll(/__doPostBack\('([^']+)'\,'Page\$(\d+)'\)/g)];
+    if (pageMatches.length === 0) {
+      console.log('fetchAllSubjectPages: ページネーションなし (1ページ)');
+      return [firstHtml];
+    }
+    const gridTarget = pageMatches[0][1];
+    const maxPage = Math.max(...pageMatches.map(m => parseInt(m[2], 10)));
+    console.log('[fetchAllSubjectPages] target=', gridTarget, 'maxPage=', maxPage);
+
+    const action = form.getAttribute('action') || window.location.href;
+    let viewState = form.querySelector('input[name="__VIEWSTATE"]')?.value || '';
+    let eventValidation = form.querySelector('input[name="__EVENTVALIDATION"]')?.value || '';
+    let viewStateGen = form.querySelector('input[name="__VIEWSTATEGENERATOR"]')?.value || '';
+
+    const pages = [firstHtml];
+    for (let p = 2; p <= maxPage; p++) {
+      const fd = new URLSearchParams();
+      fd.set('__EVENTTARGET', gridTarget);
+      fd.set('__EVENTARGUMENT', 'Page$' + p);
+      if (viewState) fd.set('__VIEWSTATE', viewState);
+      if (eventValidation) fd.set('__EVENTVALIDATION', eventValidation);
+      if (viewStateGen) fd.set('__VIEWSTATEGENERATOR', viewStateGen);
+      // 他 hidden も引き継ぐ
+      form.querySelectorAll('input[type="hidden"]').forEach(h => {
+        const n = h.name;
+        if (!fd.has(n) && !/^(__EVENTTARGET|__EVENTARGUMENT|__VIEWSTATE|__EVENTVALIDATION|__VIEWSTATEGENERATOR)$/.test(n)) {
+          fd.set(n, h.value);
+        }
+      });
+      console.log(`[fetchAllSubjectPages] POST Page$${p}`);
+      try {
+        const resp = await fetch(action, {
+          method: 'POST',
+          body: fd.toString(),
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          credentials: 'same-origin'
+        });
+        if (!resp.ok) {
+          console.warn('ページ取得失敗 page=', p, 'status=', resp.status);
+          continue;
+        }
+        const html = await resp.text();
+        pages.push(html);
+        // 次ページ用に hidden 更新
+        try {
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          viewState = doc.querySelector('input[name="__VIEWSTATE"]')?.value || viewState;
+          eventValidation = doc.querySelector('input[name="__EVENTVALIDATION"]')?.value || eventValidation;
+          viewStateGen = doc.querySelector('input[name="__VIEWSTATEGENERATOR"]')?.value || viewStateGen;
+        } catch (e) {
+          console.warn('hidden更新失敗 page=', p, e);
+        }
+        await new Promise(r => setTimeout(r, 200)); // サーバ負荷軽減
+      } catch (e) {
+        console.error('POST失敗 page=', p, e);
+      }
+    }
+    console.log('fetchAllSubjectPages: 取得ページ数', pages.length);
+    return pages;
+  }
+
+  // 追加ページHTMLから行(tr)を抽出し既存テーブルに追加
+  function appendRowsFromPages(pagesHtml) {
+    if (!targetTable) return;
+    const tbody = targetTable.querySelector('tbody') || targetTable;
+    const existingCodes = new Set();
+    Array.from(tbody.querySelectorAll('tr')).forEach(r => {
+      const c0 = r.querySelector('td');
+      if (c0) existingCodes.add(c0.textContent.trim());
+    });
+    let added = 0;
+    pagesHtml.forEach((html, idx) => {
+      try {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const tables = doc.querySelectorAll('table');
+        let pageTable = null;
+        for (let t of tables) {
+          if (t.textContent.includes('授業コード')) { pageTable = t; break; }
+        }
+        if (!pageTable) { console.warn('appendRowsFromPages: table無し pageIdx', idx); return; }
+        // ページ固有の hidden 値を取得（後で postBack の再現に使用）
+        const pageVS  = doc.querySelector('input[name="__VIEWSTATE"]')?.value || '';
+        const pageEV  = doc.querySelector('input[name="__EVENTVALIDATION"]')?.value || '';
+        const pageVSG = doc.querySelector('input[name="__VIEWSTATEGENERATOR"]')?.value || '';
+        const pageBody = pageTable.querySelector('tbody') || pageTable;
+        const pageRows = Array.from(pageBody.querySelectorAll('tr'));
+        // ヘッダー位置探し
+        let headerIndex = -1;
+        for (let i = 0; i < pageRows.length; i++) {
+          const cell = pageRows[i].querySelector('th, td');
+          if (cell && /授業コード|科目名|学生番号|氏名/.test(cell.textContent.trim())) { headerIndex = i; break; }
+        }
+        if (headerIndex === -1) return;
+        let i = headerIndex + 1;
+        while (i < pageRows.length) {
+          const row = pageRows[i];
+          const txt = row.textContent.trim();
+          if (txt.match(/\d+～\d+件目/) || txt.match(/^[\d\s次]+►?$/)) break;
+          const cells = row.querySelectorAll('td');
+          // メイン行検出
+          if (cells.length >= 3 && cells[0].textContent.trim().match(/^\d/)) {
+            const code = cells[0].textContent.trim();
+            if (!existingCodes.has(code)) {
+              const clonedMain = row.cloneNode(true);
+              // A案: メイン行に含まれるボタン/リンクは除去してから追加（二重ボタン防止）
+              try {
+                const toRemove = clonedMain.querySelectorAll('a, button, input[type="button"], input[type="image"]');
+                toRemove.forEach(el => el.remove());
+              } catch (e) {
+                console.warn('A案: メイン行ボタン除去中に警告', e);
+              }
+              clonedMain.dataset.pageAppended = 'true';
+              // ページ固有トークンを埋め込む
+              clonedMain.dataset.vs = pageVS;
+              clonedMain.dataset.ev = pageEV;
+              clonedMain.dataset.vsg = pageVSG;
+              tbody.appendChild(clonedMain);
+              existingCodes.add(code);
+              added++;
+              // 直後のボタン行も取得
+              let j = i + 1;
+              while (j < pageRows.length) {
+                const nextRow = pageRows[j];
+                const nextText = nextRow.textContent.trim();
+                const nextCells = nextRow.querySelectorAll('td');
+                if (nextText.match(/\d+～\d+件目/) || nextText.match(/^[\d\s次]+►?$/)) break;
+                // 次のメイン行が来たら終了
+                if (nextCells.length >= 3 && nextCells[0].textContent.trim().match(/^\d/)) break;
+                // ボタン・リンク類を含む行を追加（ダウンロードや__doPostBackトリガ保持）
+                if (nextRow.querySelector('input[type="button"], button, a')) {
+                  const clonedBtnRow = nextRow.cloneNode(true);
+                  clonedBtnRow.dataset.pageAppended = 'true';
+                  clonedBtnRow.dataset.vs = pageVS;
+                  clonedBtnRow.dataset.ev = pageEV;
+                  clonedBtnRow.dataset.vsg = pageVSG;
+                  
+                  console.log('[appendRowsFromPages] ボタン行クローン:', {
+                    hasInputButton: !!clonedBtnRow.querySelector('input[type="button"]'),
+                    hasInputImage: !!clonedBtnRow.querySelector('input[type="image"]'),
+                    hasButton: !!clonedBtnRow.querySelector('button'),
+                    hasLink: !!clonedBtnRow.querySelector('a'),
+                    innerHTML: clonedBtnRow.innerHTML.slice(0, 200)
+                  });
+                  
+                  // 🆕 クローンされた行内のリンク/ボタンのクリックをインターセプト
+                  const links = clonedBtnRow.querySelectorAll('a[href^="javascript:__doPostBack"]');
+                  links.forEach(link => {
+                    const originalHref = link.getAttribute('href');
+                    const match = originalHref?.match(/__doPostBack\(['"]([^'"\)]+)['"],\s*['"]([^'"\)]*)['"]\)/i);
+                    if (match) {
+                      const eventTarget = match[1];
+                      const eventArgument = match[2] || '';
+                      // クリック時に正しいトークンでPOSTを実行
+                      link.addEventListener('click', async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        console.log('[インターセプト] クリック検知 target=', eventTarget, 'arg=', eventArgument);
+                        console.log('[インターセプト] 使用トークン vsLen=', pageVS.length, 'evLen=', pageEV.length);
+                        
+                        try {
+                          // トークン付きでPOST実行
+                          const form = document.querySelector('form');
+                          if (!form) {
+                            console.error('[インターセプト] フォームが見つかりません');
+                            return;
+                          }
+                          
+                          const formData = new FormData(form);
+                          formData.set('__EVENTTARGET', eventTarget);
+                          formData.set('__EVENTARGUMENT', eventArgument);
+                          formData.set('__VIEWSTATE', pageVS);
+                          formData.set('__EVENTVALIDATION', pageEV);
+                          if (pageVSG) formData.set('__VIEWSTATEGENERATOR', pageVSG);
+                          
+                          const params = new URLSearchParams();
+                          for (const [k, v] of formData.entries()) params.append(k, v);
+                          
+                          const action = form.action || window.location.href;
+                          const resp = await fetch(action, {
+                            method: 'POST',
+                            body: params.toString(),
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                            credentials: 'same-origin'
+                          });
+                          
+                          if (!resp.ok) {
+                            console.error('[インターセプト] POST失敗 status=', resp.status);
+                            return;
+                          }
+                          
+                          // Content-Dispositionからファイル名を取得
+                          const cd = resp.headers.get('content-disposition');
+                          let filename = 'download.csv';
+                          if (cd) {
+                            const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^;"\n]+)"?/i);
+                            if (m) filename = decodeURIComponent(m[1]);
+                          }
+                          
+                          const blob = await resp.blob();
+                          downloadBlob(blob, filename);
+                          console.log('[インターセプト] ダウンロード成功 filename=', filename);
+                        } catch (err) {
+                          console.error('[インターセプト] エラー', err);
+                        }
+                      }, { capture: true });
+                      
+                      // href を無効化（念のため）
+                      link.setAttribute('href', 'javascript:void(0);');
+                      console.log('[appendRowsFromPages] リンクインターセプト設定 target=', eventTarget, 'arg=', eventArgument);
+                    }
+                  });
+                  
+                  // 🆕 input[type="image"] ボタンもインターセプト
+                  const imageButtons = clonedBtnRow.querySelectorAll('input[type="image"]');
+                  imageButtons.forEach(btn => {
+                    const onclick = btn.getAttribute('onclick');
+                    const name = btn.getAttribute('name') || '';
+                    console.log('[appendRowsFromPages] 画像ボタン検出:', { name, onclick: onclick?.slice(0, 100) });
+                    
+                    // PDFボタンはスキップ
+                    if (name.toLowerCase().includes('pdf') || (onclick && onclick.toLowerCase().includes('pdf'))) {
+                      console.log('[appendRowsFromPages] PDFボタンのためスキップ');
+                      return;
+                    }
+                    
+                    // onclick から __doPostBack を抽出
+                    if (onclick) {
+                      const match = onclick.match(/__doPostBack\(['"]([^'"\)]+)['"],\s*['"]([^'"\)]*)['"]\)/i);
+                      if (match) {
+                        const eventTarget = match[1];
+                        const eventArgument = match[2] || '';
+                        
+                        btn.addEventListener('click', async (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          console.log('[インターセプト/画像] クリック検知 target=', eventTarget, 'arg=', eventArgument);
+                          console.log('[インターセプト/画像] 使用トークン vsLen=', pageVS.length, 'evLen=', pageEV.length);
+                          
+                          try {
+                            const form = document.querySelector('form');
+                            if (!form) {
+                              console.error('[インターセプト/画像] フォームが見つかりません');
+                              return;
+                            }
+                            
+                            const formData = new FormData(form);
+                            formData.set('__EVENTTARGET', eventTarget);
+                            formData.set('__EVENTARGUMENT', eventArgument);
+                            formData.set('__VIEWSTATE', pageVS);
+                            formData.set('__EVENTVALIDATION', pageEV);
+                            if (pageVSG) formData.set('__VIEWSTATEGENERATOR', pageVSG);
+                            
+                            // 画像ボタンの場合は .x, .y も送信
+                            if (name) {
+                              formData.set(name + '.x', '1');
+                              formData.set(name + '.y', '1');
+                            }
+                            
+                            const params = new URLSearchParams();
+                            for (const [k, v] of formData.entries()) params.append(k, v);
+                            
+                            const action = form.action || window.location.href;
+                            const resp = await fetch(action, {
+                              method: 'POST',
+                              body: params.toString(),
+                              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                              credentials: 'same-origin'
+                            });
+                            
+                            if (!resp.ok) {
+                              console.error('[インターセプト/画像] POST失敗 status=', resp.status);
+                              return;
+                            }
+                            
+                            const cd = resp.headers.get('content-disposition');
+                            let filename = 'download.csv';
+                            if (cd) {
+                              const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^;"\n]+)"?/i);
+                              if (m) filename = decodeURIComponent(m[1]);
+                            }
+                            
+                            const blob = await resp.blob();
+                            downloadBlob(blob, filename);
+                            console.log('[インターセプト/画像] ダウンロード成功 filename=', filename);
+                          } catch (err) {
+                            console.error('[インターセプト/画像] エラー', err);
+                          }
+                        }, { capture: true });
+                        
+                        // onclick を無効化
+                        btn.setAttribute('onclick', 'return false;');
+                        console.log('[appendRowsFromPages] 画像ボタンインターセプト設定 target=', eventTarget, 'arg=', eventArgument);
+                      }
+                    }
+                  });
+                  
+                  tbody.appendChild(clonedBtnRow);
+                }
+                // その他の行はスキップして打ち切り（余計な説明行は不要）
+                break;
+              }
+            }
+            i++;
+            continue;
+          }
+          i++;
+        }
+      } catch (e) {
+        console.warn('appendRowsFromPages: 解析失敗 pageIdx', idx, e);
+      }
+    });
+    console.log('appendRowsFromPages: 追加行数', added);
+  // 元のボタンは非表示にしない（ユーザー要望）
+  // 以前は重複時に元ボタンを隠していましたが、分かりにくいため無効化しました。
+    // 🆕 クリック委譲ハンドラをセット（追加行の中でのクリックを捕捉）
+    try { installDelegatedInterceptors(); } catch(e){ console.warn('委譲ハンドラ設定失敗', e); }
+    return added;
+  }
+
+  // 🆕 追加行がある授業コードでは、元の（非追加）ボタンを非表示にする
+  function hideOriginalButtonsWhenAppendedPresent() {
+    if (!targetTable) return;
+    const tbody = targetTable.querySelector('tbody') || targetTable;
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    // 授業コードごとに、追加行の有無を確認
+    const codeInfo = new Map();
+    for (const r of rows) {
+      const cells = r.querySelectorAll('td');
+      const code = (cells[0]?.textContent || '').trim();
+      if (!code) continue;
+      const isMain = cells.length >= 3 && /^\d/.test(cells[0].textContent.trim());
+      const hasControls = !!r.querySelector('input[type="image"], input[type="button"], button, a[href]');
+      const isAppended = r.dataset.pageAppended === 'true';
+      if (!codeInfo.has(code)) codeInfo.set(code, { hasAppended: false, rows: [] });
+      const info = codeInfo.get(code);
+      info.hasAppended = info.hasAppended || isAppended;
+      info.rows.push({ row: r, isMain, hasControls, isAppended });
+    }
+    // 追加行があるコードでは、非追加側のコントロールを隠す
+    codeInfo.forEach((info, code) => {
+      if (!info.hasAppended) return;
+      info.rows.forEach(({ row, isMain, hasControls, isAppended }) => {
+        if (!hasControls) return;
+        if (isAppended) return; // クローン（正しいトークン）側は残す
+        // 元の（非追加）側のボタン/リンクを隠す
+        row.querySelectorAll('input[type="image"], input[type="button"], button, a[href]').forEach(el => {
+          el.style.display = 'none';
+        });
+        // 代わりに案内ラベルを表示
+        const note = document.createElement('div');
+        note.textContent = '統合ページ用のボタンをご利用ください';
+        note.style.fontSize = '11px';
+        note.style.color = '#666';
+        note.style.background = '#f3f3f3';
+        note.style.borderRadius = '4px';
+        note.style.padding = '4px 6px';
+        note.style.display = 'inline-block';
+        note.style.margin = '2px 0';
+        row.querySelector('td')?.appendChild(note);
+      });
+    });
+    console.log('hideOriginalButtonsWhenAppendedPresent: 完了');
+  }
+
+  // 🆕 document レベルでのクリック委譲: 追加された行内での __doPostBack をトークン付きPOSTに差し替える
+  function installDelegatedInterceptors() {
+    if (window.__ntutDelegationInstalled) return;
+    window.__ntutDelegationInstalled = true;
+    document.addEventListener('click', async (e) => {
+      try {
+        const target = e.target;
+        if (!target) return;
+        // クリックされた要素が追加行(tr[data-page-appended])配下か
+        const tr = (target.closest && target.closest('tr'));
+        if (!tr || tr.dataset.pageAppended !== 'true') return;
+        const vs = tr.dataset.vs || '';
+        const ev = tr.dataset.ev || '';
+        const vsg = tr.dataset.vsg || '';
+        // 対象要素から __doPostBack の情報を抽出
+        let eventTarget = null;
+        let eventArgument = '';
+        // a[href] パターン
+        const href = target.getAttribute && target.getAttribute('href');
+        if (href && href.toLowerCase().startsWith('javascript:')) {
+          const m = href.match(/__doPostBack\(['"]([^'"\)]+)['"],\s*['"]([^'"\)]*)['"]\)/i);
+          if (m) { eventTarget = m[1]; eventArgument = m[2] || ''; }
+        }
+        // onclick パターン（input/button等）
+        if (!eventTarget) {
+          const onclick = target.getAttribute && target.getAttribute('onclick');
+          if (onclick) {
+            const m2 = onclick.match(/__doPostBack\(['"]([^'"\)]+)['"],\s*['"]([^'"\)]*)['"]\)/i);
+            if (m2) { eventTarget = m2[1]; eventArgument = m2[2] || ''; }
+          }
+        }
+        // 画像ボタンの name.x / name.y 対応
+        const isImageBtn = (target.tagName === 'INPUT' && target.type === 'image');
+        const imgName = isImageBtn ? (target.getAttribute('name') || target.getAttribute('id') || '') : '';
+        // 介入: 既定動作を止めてトークン付きPOST
+        e.preventDefault();
+        e.stopPropagation();
+        if (eventTarget) {
+          console.log('[委譲] click捕捉(イベントターゲット有) target=', eventTarget, 'arg=', eventArgument, 'vsLen=', vs.length, 'evLen=', ev.length);
+        } else if (isImageBtn && imgName) {
+          console.log('[委譲] click捕捉(画像ボタン) name=', imgName, 'vsLen=', vs.length, 'evLen=', ev.length);
+        } else {
+          console.log('[委譲] click捕捉(対象未特定) 要素=', target.tagName);
+        }
+        const form = document.querySelector('form');
+        if (!form) { console.error('[委譲] form無し'); return; }
+        const fd = new FormData(form);
+        // EVENTTARGET/ARGUMENT は取得できた場合のみ設定
+        if (eventTarget) {
+          fd.set('__EVENTTARGET', eventTarget);
+          fd.set('__EVENTARGUMENT', eventArgument);
+        }
+        if (vs) fd.set('__VIEWSTATE', vs);
+        if (ev) fd.set('__EVENTVALIDATION', ev);
+        if (vsg) fd.set('__VIEWSTATEGENERATOR', vsg);
+        // 画像ボタンの場合は name.x / name.y を送信（EVENTTARGETなしでもサーバ側がボタンハンドラを特定可能）
+        if (isImageBtn && imgName) { fd.set(imgName + '.x', '1'); fd.set(imgName + '.y', '1'); }
+        const params = new URLSearchParams();
+        for (const [k,v] of fd.entries()) params.append(k, v);
+        const action = form.action || window.location.href;
+        const resp = await fetch(action, {
+          method: 'POST',
+          body: params.toString(),
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          credentials: 'same-origin'
+        });
+        if (!resp.ok) { console.error('[委譲] POST失敗 status=', resp.status); return; }
+        // Content-Dispositionからファイル名推定
+        const cd = resp.headers.get('content-disposition');
+        let filename = 'download.csv';
+        if (cd) {
+          const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^;"\n]+)"?/i);
+          if (m) filename = decodeURIComponent(m[1]);
+        }
+        const blob = await resp.blob();
+        downloadBlob(blob, filename);
+        console.log('[委譲] ダウンロード成功 filename=', filename);
+      } catch (err) {
+        console.error('[委譲] エラー', err);
+      }
+    }, true); // capture=true で先に捕捉
+    console.log('委譲クリックハンドラを設定しました');
   }
 
   function getClassCodeFromGroup(groupRows) {
@@ -1049,6 +1550,8 @@
 
   // 科目のCSVをまとめて取得して結合しダウンロードする
   async function handleSubjectDownload(subject, rowsForSubject, triggerButton) {
+    console.log('[handleSubjectDownload] ========== START ==========');
+    console.log('subject=', subject, 'rowsForSubject.length=', rowsForSubject.length);
     triggerButton.disabled = true;
     const originalText = triggerButton.textContent;
     triggerButton.textContent = '取得中...';
@@ -1080,7 +1583,8 @@
     groups.forEach((groupRows, idx) => {
       const mainCells = groupRows.find(r => r.querySelectorAll('td').length >= 3)?.querySelectorAll('td');
       const classCode = (mainCells && mainCells[0] && mainCells[0].textContent.trim()) || (`${idx+1}`);
-      console.log(`  group[${idx}]: classCode='${classCode}' rows=${groupRows.length}`);
+      const hasTokens = groupRows[0]?.dataset?.vs ? 'トークン有' : 'トークン無';
+      console.log(`  group[${idx}]: classCode='${classCode}' rows=${groupRows.length} ${hasTokens}`);
     });
 
     // 🆕 各グループのデータを取得して結合する
@@ -1173,7 +1677,36 @@
   }
 
   // グループ(複数行)からCSVを取得する関数。行群内のアンカー・ボタン・onclickや __doPostBack を探す
+  // --- 診断用ヘルパ: CSVの2行目(最初のデータ行)に授業コードが含まれているか検証しログを出す ---
+  function verifyCsvMatchesClassCode(csvText, expectedCode) {
+    try {
+      if (!csvText || !expectedCode) return;
+      const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
+      if (lines.length < 2) {
+        console.warn('[verifyCsv] 行不足 expected=', expectedCode, 'lines.length=', lines.length);
+        return;
+      }
+      const dataLine = lines[1];
+      const cols = parseCSVLine(dataLine);
+      const got = cols[0] || '';
+      if (got !== expectedCode) {
+        console.warn('[verifyCsv] 授業コード不一致 expected=', expectedCode, 'got=', got, 'dataLinePreview=', dataLine.slice(0,120));
+      } else {
+        console.log('[verifyCsv] 授業コード一致 OK:', expectedCode, '総行数=', lines.length);
+      }
+    } catch (e) {
+      console.warn('[verifyCsv] 例外', e);
+    }
+  }
   async function fetchCsvFromGroup(groupRows) {
+    const mainRow = groupRows.find(r => r.querySelectorAll('td').length >= 3);
+    let expectedClassCode = '';
+    if (mainRow) {
+      const mcells = mainRow.querySelectorAll('td');
+      expectedClassCode = mcells[0]?.textContent.trim() || '';
+    }
+    console.group('[fetchCsvFromGroup] start');
+    console.log('groupRows.length=', groupRows.length, 'expectedClassCode=', expectedClassCode);
     // 1) グループ内のアンカータグを探す
     for (const row of groupRows) {
       const anchors = row.querySelectorAll('a[href]');
@@ -1187,7 +1720,23 @@
           if (m) {
             const target = m[1];
             const arg = m[2] || '';
-            return await postBackFetch(target, arg);
+            // 行にページ固有トークンがある場合はそれを使って postBack
+            const tr = a.closest('tr');
+            const vs  = tr?.dataset.vs;
+            const ev  = tr?.dataset.ev;
+            const vsg = tr?.dataset.vsg;
+            if (vs || ev || vsg) {
+              console.log('invoke postBackFetchWithTokens target=', target, 'arg=', arg, 'tokensShort={vsLen:', vs?.length, 'evLen:', ev?.length, 'vsg:', vsg, '}');
+              const txt = await postBackFetchWithTokens(target, arg, { vs, ev, vsg });
+              verifyCsvMatchesClassCode(txt, expectedClassCode);
+              console.groupEnd();
+              return txt;
+            }
+            console.log('invoke postBackFetch target=', target, 'arg=', arg);
+            const txt2 = await postBackFetch(target, arg);
+            verifyCsvMatchesClassCode(txt2, expectedClassCode);
+            console.groupEnd();
+            return txt2;
           }
           continue;
         }
@@ -1199,7 +1748,10 @@
         // clone for safe reading: use clone for text conversion, keep original for possible blob download
         const respForText = resp.clone();
         try {
-          return await responseToText(respForText);
+          const txt = await responseToText(respForText);
+          verifyCsvMatchesClassCode(txt, expectedClassCode);
+          console.groupEnd();
+          return txt;
         } catch (e) {
           // fallback: サーバがテキストを返さない場合。PDF 等の不要なファイルを保存しないように判定する
           try {
@@ -1271,7 +1823,11 @@
       if (m3) {
         const target = m3[1];
         const arg = m3[2] || '';
-        return await postBackFetch(target, arg);
+        console.log('onclick __doPostBack invoke target=', target, 'arg=', arg);
+        const t = await postBackFetch(target, arg);
+        verifyCsvMatchesClassCode(t, expectedClassCode);
+        console.groupEnd();
+        return t;
       }
 
       // data-url 属性
@@ -1300,6 +1856,7 @@
       throw new Error('自動取得に対応していないトリガです（ボタンをクリックしてダウンロードしてください）');
     }
 
+    console.groupEnd();
     throw new Error('ダウンロードトリガーが見つかりませんでした');
   }
 
@@ -1425,6 +1982,40 @@
       } catch (e2) {
         console.warn('postBackFetch: probe 取得失敗', e2);
       }
+      return '';
+    }
+  }
+
+  // ページ固有トークンを用いた __doPostBack （他ページの viewstate を使う）
+  async function postBackFetchWithTokens(eventTarget, eventArgument, tokens) {
+    const form = document.querySelector('form');
+    if (!form) throw new Error('フォームが見つかりません');
+    // 現在のフォーム hidden も基礎としてコピーしつつ viewstate 系を差し替え
+    const formData = new FormData(form);
+    formData.set('__EVENTTARGET', eventTarget);
+    formData.set('__EVENTARGUMENT', eventArgument);
+    if (tokens.vs) formData.set('__VIEWSTATE', tokens.vs);
+    if (tokens.ev) formData.set('__EVENTVALIDATION', tokens.ev);
+    if (tokens.vsg) formData.set('__VIEWSTATEGENERATOR', tokens.vsg);
+    const params = new URLSearchParams();
+    for (const [k, v] of formData.entries()) params.append(k, v);
+    const action = form.action || window.location.href;
+    const resp = await fetch(action, {
+      method: 'POST',
+      body: params.toString(),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      credentials: 'same-origin'
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+    try {
+      console.log('postBackFetchWithTokens: target=', eventTarget, 'arg=', eventArgument,
+        'vsLen=', tokens.vs?.length || 0, 'evLen=', tokens.ev?.length || 0, 'vsg=', tokens.vsg?.length || 0);
+      const clone = resp.clone();
+      const txt = await responseToText(clone);
+      return txt; // verifyCsv は呼び出し側で
+    } catch (e) {
+      // 必要なら Blob フォールバック（省略可）
+      console.warn('postBackFetchWithTokens: responseToText失敗', e);
       return '';
     }
   }
