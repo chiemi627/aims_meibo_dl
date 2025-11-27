@@ -252,7 +252,15 @@
         appendRowsFromPages(htmlPages.slice(1)); // 先頭は現行DOM
         window.ntut_allPagesLoaded = true;
         buildSubjectButtons();
-        loadAllBtn.textContent = '統合完了 ✅';
+        
+    // 全ページ統合後の localStorage 保存状況を確認
+    const allData = loadAllFromLocalStorage();
+    let totalCount = 0;
+    allData.forEach(groups => { totalCount += groups.length; });
+    console.log(`[全ページ統合完了] localStorage総保存数: ${totalCount}件 (${allData.size}科目)`);
+        
+    loadAllBtn.textContent = '統合完了 ✅';
+    alert(`全ページ統合完了！\n${totalCount}件の授業コードを ${allData.size} 科目に保存しました。`);
       } catch (e) {
         console.error('全ページ取得失敗:', e);
         alert('全ページ取得に失敗しました: ' + (e.message || e));
@@ -318,8 +326,14 @@
     while (i < rows.length) {
       const row = rows[i];
       const rowText = row.textContent.trim();
-      // 下部ページネーションで終了
-      if (rowText.match(/\d+～\d+件目/) || rowText.match(/^[\d\s次]+►?$/)) break;
+      // ページ情報行 (例: 21～34件目 / 34件) はスキップして続行
+      if (rowText.match(/\d+～\d+件目/)) {
+        console.log('[buildSubjectButtons] ページ情報行スキップ i=', i, 'text=', rowText.slice(0,50));
+        i++;
+        continue;
+      }
+      // ページナビゲーション行 (次 など) のみ終了判定
+      if (rowText.match(/^[\d\s次]+►?$/)) break;
 
       const cells = row.querySelectorAll('td');
       // メイン行を検出
@@ -331,9 +345,15 @@
         while (j < rows.length) {
           const nextRow = rows[j];
           const nextText = nextRow.textContent.trim();
-          // ページネーションや次のメイン行が来たら終了
+          // ページ情報行はスキップ
+          if (nextText.match(/\d+～\d+件目/)) {
+            console.log('[buildSubjectButtons] (グループ内) ページ情報行スキップ j=', j, 'text=', nextText.slice(0,50));
+            j++;
+            continue;
+          }
+          // ページナビゲーション行または次のメイン行で終了
           const nextCells = nextRow.querySelectorAll('td');
-          if (nextText.match(/\d+～\d+件目/) || nextText.match(/^[\d\s次]+►?$/)) break;
+          if (nextText.match(/^[\d\s次]+►?$/)) break;
           if (nextCells.length >= 3 && nextCells[0].textContent.trim().match(/^\d/)) break;
 
           // ボタンやリンクを含む行をグループに含める
@@ -554,7 +574,14 @@
         while (i < pageRows.length) {
           const row = pageRows[i];
           const txt = row.textContent.trim();
-          if (txt.match(/\d+～\d+件目/) || txt.match(/^[\d\s次]+►?$/)) break;
+          // ページ情報行（例: 1～20件目 / 34件）が途中に現れるケースでは break せずスキップ
+          if (txt.match(/\d+～\d+件目/)) {
+            console.log('[appendRowsFromPages] ページ情報行スキップ i=', i, 'text=', txt.slice(0,50));
+            i++; // 次行へ
+            continue;
+          }
+          // ページナビゲーション行（次 など）でのみ終了判定
+          if (txt.match(/^[\d\s次]+►?$/)) break;
           const cells = row.querySelectorAll('td');
           // メイン行検出
           if (cells.length >= 3 && cells[0].textContent.trim().match(/^\d/)) {
@@ -587,7 +614,12 @@
                 const nextRow = pageRows[j];
                 const nextText = nextRow.textContent.trim();
                 const nextCells = nextRow.querySelectorAll('td');
-                if (nextText.match(/\d+～\d+件目/) || nextText.match(/^[\d\s次]+►?$/)) break;
+                if (nextText.match(/\d+～\d+件目/)) {
+                  console.log('[appendRowsFromPages] (ボタン行探索) ページ情報行スキップ j=', j, 'text=', nextText.slice(0,50));
+                  j++;
+                  continue;
+                }
+                if (nextText.match(/^[\d\s次]+►?$/)) break;
                 // 次のメイン行が来たら終了
                 if (nextCells.length >= 3 && nextCells[0].textContent.trim().match(/^\d/)) break;
                 // ボタン・リンク類を含む行を追加（ダウンロードや__doPostBackトリガ保持）
