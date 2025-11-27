@@ -52,6 +52,28 @@
   }
 // ページが読み込まれたら授業科目名でソート機能を追加
 (function() {
+  // ページロード時に自動で全ページ取得・統合
+  (async function autoLoadAllPages() {
+    if (!window.ntut_allPagesLoaded) {
+      try {
+        const htmlPages = await fetchAllSubjectPages();
+        if (htmlPages.length > 1) {
+          appendRowsFromPages(htmlPages.slice(1)); // 先頭は現行DOM
+          window.ntut_allPagesLoaded = true;
+          buildSubjectButtons();
+          // localStorage保存状況をログ出力
+          const allData = loadAllFromLocalStorage();
+          let totalCount = 0;
+          allData.forEach(groups => { totalCount += groups.length; });
+          console.log(`[自動全ページ統合] localStorage総保存数: ${totalCount}件 (${allData.size}科目)`);
+        } else {
+          console.log('[自動全ページ統合] 追加ページなし');
+        }
+      } catch (e) {
+        console.error('[自動全ページ統合] 失敗:', e);
+      }
+    }
+  })();
 
   // localStorageキーの接頭辞
   const STORAGE_PREFIX = 'ntutdx1_';
@@ -1707,14 +1729,7 @@
       triggerButton.disabled = false;
     }, 1200);
 
-    // ダウンロード後に結合ファイル選択ダイアログ誘導
-    if (outputLines.length > 1) {
-      try {
-        showAutoMergePrompt(subject, true); // true = 出欠テンプレートモード
-      } catch (e) {
-        console.warn('自動結合プロンプト表示失敗', e);
-      }
-    }
+    // ダウンロード後のダイアログ表示は廃止
 
     if (errors.length > 0) {
       alert(`一部のファイルで取得エラーがありました:\n${errors.join('\n')}`);
@@ -1832,14 +1847,7 @@
       triggerButton.disabled = false;
     }, 1200);
 
-    // 🆕 ダウンロード後に結合ファイル選択ダイアログ誘導オーバーレイ表示
-    if (mergedLines.length > 0) {
-      try {
-        showAutoMergePrompt(subject);
-      } catch (e) {
-        console.warn('自動結合プロンプト表示失敗', e);
-      }
-    }
+    // ダウンロード後のダイアログ表示は廃止
 
     if (errors.length > 0) {
       alert(`一部のファイルで取得エラーがありました:\n${errors.join('\n')}`);
