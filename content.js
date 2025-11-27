@@ -561,12 +561,17 @@
             const code = cells[0].textContent.trim();
             if (!existingCodes.has(code)) {
               const clonedMain = row.cloneNode(true);
-              // A案: メイン行に含まれるボタン/リンクは除去してから追加（二重ボタン防止）
+              // A案改: ボタン/リンクを含むセル（td）ごと削除
               try {
-                const toRemove = clonedMain.querySelectorAll('a, button, input[type="button"], input[type="image"]');
-                toRemove.forEach(el => el.remove());
+                const cellsInClone = clonedMain.querySelectorAll('td');
+                cellsInClone.forEach(cell => {
+                  const hasButtons = cell.querySelector('a, button, input[type="button"], input[type="image"]');
+                  if (hasButtons) {
+                    cell.remove(); // セルごと削除
+                  }
+                });
               } catch (e) {
-                console.warn('A案: メイン行ボタン除去中に警告', e);
+                console.warn('A案: メイン行ボタンセル除去中に警告', e);
               }
               clonedMain.dataset.pageAppended = 'true';
               // ページ固有トークンを埋め込む
@@ -753,7 +758,183 @@
                     }
                   });
                   
-                  tbody.appendChild(clonedBtnRow);
+                  // 🆕 ボタン専用行を別行として追加せず、メイン行の最後にセルとして追加
+                  try {
+                    const btnRowCells = clonedBtnRow.querySelectorAll('td, th');
+                    console.log('[appendRowsFromPages] ボタン行セル情報:', {
+                      cellCount: btnRowCells.length,
+                      cellDetails: Array.from(btnRowCells).map((c, i) => ({
+                        index: i,
+                        tagName: c.tagName,
+                        colspan: c.getAttribute('colspan'),
+                        hasButtons: !!c.querySelector('input, button, a'),
+                        innerHTML: c.innerHTML.slice(0, 150)
+                      }))
+                    });
+                    
+                    // ボタン専用行の全セル（<th>と<td>）を<table>で包んで新しい<td>に入れる
+                    const newCell = document.createElement('td');
+                    newCell.className = 'grid_line';
+                    newCell.style.width = '250px';
+                    
+                    // 内部テーブル構造を作成
+                    const innerTable = document.createElement('table');
+                    const innerTbody = document.createElement('tbody');
+                    const innerRow = document.createElement('tr');
+                    
+                    // ボタン専用行の全セルをクローンして内部行に追加
+                    btnRowCells.forEach(cell => {
+                      const clonedCell = cell.cloneNode(true);
+                      innerRow.appendChild(clonedCell);
+                    });
+                    
+                    innerTbody.appendChild(innerRow);
+                    innerTable.appendChild(innerTbody);
+                    newCell.appendChild(innerTable);
+                    
+                    // 🆕 クローンしたセル内のボタンに対してインターセプト設定を再適用
+                    // リンク（PDFボタン）のインターセプト
+                    const newLinks = newCell.querySelectorAll('a[href^="javascript:__doPostBack"]');
+                    newLinks.forEach(link => {
+                      const originalHref = link.getAttribute('href');
+                      const match = originalHref?.match(/__doPostBack\(['"]([^'"\)]+)['"],\s*['"]([^'"\)]*)['"]\)/i);
+                      if (match) {
+                        const eventTarget = match[1];
+                        const eventArgument = match[2] || '';
+                        link.addEventListener('click', async (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          console.log('[統合セル/リンク] クリック検知 target=', eventTarget, 'arg=', eventArgument);
+                          console.log('[統合セル/リンク] 使用トークン vsLen=', pageVS.length, 'evLen=', pageEV.length);
+                          
+                          try {
+                            const form = document.querySelector('form');
+                            if (!form) {
+                              console.error('[統合セル/リンク] フォームが見つかりません');
+                              return;
+                            }
+                            
+                            const formData = new FormData(form);
+                            formData.set('__EVENTTARGET', eventTarget);
+                            formData.set('__EVENTARGUMENT', eventArgument);
+                            formData.set('__VIEWSTATE', pageVS);
+                            formData.set('__EVENTVALIDATION', pageEV);
+                            if (pageVSG) formData.set('__VIEWSTATEGENERATOR', pageVSG);
+                            
+                            const params = new URLSearchParams();
+                            for (const [k, v] of formData.entries()) params.append(k, v);
+                            
+                            const action = form.action || window.location.href;
+                            const resp = await fetch(action, {
+                              method: 'POST',
+                              body: params.toString(),
+                              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                              credentials: 'same-origin'
+                            });
+                            
+                            if (!resp.ok) {
+                              console.error('[統合セル/リンク] POST失敗 status=', resp.status);
+                              return;
+                            }
+                            
+                            const cd = resp.headers.get('content-disposition');
+                            let filename = 'download.csv';
+                            if (cd) {
+                              const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^;"\n]+)"?/i);
+                              if (m) filename = decodeURIComponent(m[1]);
+                            }
+                            
+                            const blob = await resp.blob();
+                            downloadBlob(blob, filename);
+                            console.log('[統合セル/リンク] ダウンロード成功 filename=', filename);
+                          } catch (err) {
+                            console.error('[統合セル/リンク] エラー', err);
+                          }
+                        }, { capture: true });
+                        link.setAttribute('href', 'javascript:void(0);');
+                        console.log('[統合セル] リンクインターセプト設定 target=', eventTarget);
+                      }
+                    });
+                    
+                    // 画像ボタン（ダウンロードボタン）のインターセプト
+                    const newImageButtons = newCell.querySelectorAll('input[type="image"]');
+                    newImageButtons.forEach(btn => {
+                      const onclick = btn.getAttribute('onclick');
+                      const name = btn.getAttribute('name') || '';
+                      
+                      // PDFボタンはスキップ
+                      if (name.toLowerCase().includes('pdf') || (onclick && onclick.toLowerCase().includes('pdf'))) {
+                        return;
+                      }
+                      
+                      // ダウンロードボタンの場合はname属性から処理
+                      if (name) {
+                        btn.addEventListener('click', async (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          console.log('[統合セル/画像] クリック検知 name=', name);
+                          console.log('[統合セル/画像] 使用トークン vsLen=', pageVS.length, 'evLen=', pageEV.length);
+                          
+                          try {
+                            const form = document.querySelector('form');
+                            if (!form) {
+                              console.error('[統合セル/画像] フォームが見つかりません');
+                              return;
+                            }
+                            
+                            const formData = new FormData(form);
+                            formData.set('__VIEWSTATE', pageVS);
+                            formData.set('__EVENTVALIDATION', pageEV);
+                            if (pageVSG) formData.set('__VIEWSTATEGENERATOR', pageVSG);
+                            
+                            // 画像ボタンの場合は .x, .y も送信
+                            formData.set(name + '.x', '1');
+                            formData.set(name + '.y', '1');
+                            
+                            const params = new URLSearchParams();
+                            for (const [k, v] of formData.entries()) params.append(k, v);
+                            
+                            const action = form.action || window.location.href;
+                            const resp = await fetch(action, {
+                              method: 'POST',
+                              body: params.toString(),
+                              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                              credentials: 'same-origin'
+                            });
+                            
+                            if (!resp.ok) {
+                              console.error('[統合セル/画像] POST失敗 status=', resp.status);
+                              return;
+                            }
+                            
+                            const cd = resp.headers.get('content-disposition');
+                            let filename = 'download.csv';
+                            if (cd) {
+                              const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^;"\n]+)"?/i);
+                              if (m) filename = decodeURIComponent(m[1]);
+                            }
+                            
+                            const blob = await resp.blob();
+                            downloadBlob(blob, filename);
+                            console.log('[統合セル/画像] ダウンロード成功 filename=', filename);
+                          } catch (err) {
+                            console.error('[統合セル/画像] エラー', err);
+                          }
+                        }, { capture: true });
+                        
+                        if (onclick) btn.setAttribute('onclick', 'return false;');
+                        console.log('[統合セル] 画像ボタンインターセプト設定 name=', name);
+                      }
+                    });
+                    
+                    // メイン行に追加
+                    clonedMain.appendChild(newCell);
+                    console.log('[appendRowsFromPages] ボタンセルをメイン行に統合完了 cellCount=', btnRowCells.length);
+                  } catch (e) {
+                    console.warn('ボタンセル統合中に警告', e);
+                    // 失敗した場合は従来通りボタン行を追加
+                    tbody.appendChild(clonedBtnRow);
+                  }
                 }
                 // その他の行はスキップして打ち切り（余計な説明行は不要）
                 break;
