@@ -318,7 +318,7 @@
     statusDiv.style.fontSize = '13px';
     statusDiv.style.color = '#666';
     statusDiv.style.padding = '8px';
-    statusDiv.textContent = `💾 授業別科目番号収集: ${savedTotal}件 (${savedData.size}科目)`;
+    statusDiv.textContent = `科目一覧: ${savedTotal}件 (${savedData.size}科目)`;
     
     // 🆕 表示/非表示切り替えボタン
     const toggleBtn = document.createElement('button');
