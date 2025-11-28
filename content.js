@@ -78,6 +78,95 @@
   // localStorageキーの接頭辞
   const STORAGE_PREFIX = 'ntutdx1_';
 
+  // 名称マッピング用キー
+  const NAME_MAP_KEY = STORAGE_PREFIX + 'name_map';
+
+  // 科目名正規化ユーティリティ
+  function normalizeName(name) {
+    if (!name) return '';
+    try {
+      let s = String(name).normalize('NFKC').trim();
+      // 全角英数を半角に
+      s = s.replace(/[０-９Ａ-Ｚａ-ｚ]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+      // 記号類を除去
+      s = s.replace(/[・､，,。．\.\(\)\[\]＜＞<>《》｛｝{}「」『』：:・\-—―\/\\]/g, '');
+      s = s.replace(/\s+/g, ' ');
+      return s.toLowerCase();
+    } catch (e) {
+      return String(name).toLowerCase();
+    }
+  }
+
+  function loadNameMap() {
+    try {
+      const raw = localStorage.getItem(NAME_MAP_KEY) || '{}';
+      const obj = JSON.parse(raw);
+      Object.keys(obj).forEach(k => { if (!Array.isArray(obj[k])) obj[k] = Array.isArray(obj[k]) ? obj[k] : []; });
+      return obj;
+    } catch (e) { return {}; }
+  }
+
+  function saveNameMap(map) {
+    try { localStorage.setItem(NAME_MAP_KEY, JSON.stringify(map)); return true; } catch (e) { return false; }
+  }
+
+  function findCanonical(name) {
+    const map = loadNameMap();
+    const n = normalizeName(name || '');
+    for (const canonical of Object.keys(map)) {
+      if (normalizeName(canonical) === n) return canonical;
+      const aliases = map[canonical] || [];
+      for (const a of aliases) if (normalizeName(a) === n) return canonical;
+    }
+    return null;
+  }
+
+  // 拡張フォルダ内の ntut_name_map.json を読み込み、既存の localStorage マップにマージする
+  async function tryLoadEmbeddedNameMap() {
+    try {
+      console.log('[content.js] tryLoadEmbeddedNameMap: start');
+      if (typeof chrome === 'undefined') { console.log('[content.js] tryLoadEmbeddedNameMap: chrome is undefined'); return false; }
+      if (!chrome.runtime) { console.log('[content.js] tryLoadEmbeddedNameMap: chrome.runtime is undefined'); return false; }
+      if (!chrome.runtime.getURL) { console.log('[content.js] tryLoadEmbeddedNameMap: chrome.runtime.getURL is undefined'); return false; }
+      const url = chrome.runtime.getURL('ntut_name_map.json');
+      console.log('[content.js] tryLoadEmbeddedNameMap: fetch url=', url);
+      const r = await fetch(url, { cache: 'no-store' });
+      console.log('[content.js] tryLoadEmbeddedNameMap: fetch response ok=', r && r.ok, 'status=', r && r.status);
+      if (!r.ok) {
+        console.log('[content.js] tryLoadEmbeddedNameMap: fetch failed or file not present');
+        return false;
+      }
+      const obj = await r.json();
+      if (!obj || typeof obj !== 'object') {
+        console.log('[content.js] tryLoadEmbeddedNameMap: invalid json object');
+        return false;
+      }
+      const existing = loadNameMap();
+      Object.keys(obj).forEach(k => { existing[k] = Array.isArray(obj[k]) ? obj[k] : []; });
+      saveNameMap(existing);
+      console.log('[content.js] embedded ntut_name_map.json を読み込みました', Object.keys(obj).length, 'entries');
+      // 保存後に同じウィンドウで表示を再構築（storage イベントは同一ウィンドウでは発火しないため）
+      try {
+        if (typeof buildSubjectButtons === 'function') {
+          console.log('[content.js] embedded map loaded -> rebuilding subject buttons');
+          setTimeout(() => { try { buildSubjectButtons(); } catch(e) { console.warn('buildSubjectButtons after embedded load failed', e); } }, 50);
+        }
+      } catch(e) {
+        console.warn('post-load rebuild error', e);
+      }
+      return true;
+    } catch (e) {
+      console.error('[content.js] tryLoadEmbeddedNameMap: exception', e);
+      return false;
+    }
+  }
+
+  // 起動時に埋め込みマップを試し読み（存在すれば localStorage にマージされる）
+  tryLoadEmbeddedNameMap().then(ok => {
+    window.ntut_embeddedNameMapLoaded = !!ok;
+    if (ok) console.log('[content.js] embedded name map merged');
+  });
+
   console.log('ソート機能拡張機能が実行されました');
   
 
@@ -112,6 +201,10 @@
       targetTable.parentNode.insertBefore(subjectList, targetTable);
     } else {
       document.body.prepend(subjectList);
+    }
+    // 埋め込みマップが読み込まれていれば、表示を再構築してマッピングを反映する
+    if (window.ntut_embeddedNameMapLoaded) {
+      try { console.log('[content.js] embedded map detected -> buildSubjectButtons'); buildSubjectButtons(); } catch(e){ console.warn('buildSubjectButtons on embedded map failed', e); }
     }
   }
   
@@ -360,7 +453,16 @@
       const cells = row.querySelectorAll('td');
       // メイン行を検出
       if (cells.length >= 3 && cells[0].textContent.trim().match(/^\d/)) {
-        const subject = (cells[2] && cells[2].textContent.trim()) || '（無題）';
+        const rawSubject = (cells[2] && cells[2].textContent.trim()) || '（無題）';
+        let canonical = null;
+        try { canonical = (typeof findCanonical === 'function') ? findCanonical(rawSubject) : null; } catch(e){ console.warn('findCanonical error', e); }
+        const subject = canonical || rawSubject;
+        // デバッグ: マッピングが正しく機能しているかをログ出力
+        if (canonical) {
+          console.log('[buildSubjectButtons] rawSubject -> canonical:', { raw: rawSubject, canonical });
+        } else {
+          console.log('[buildSubjectButtons] no canonical for:', rawSubject);
+        }
         // グループ化: メイン行 + 直後のボタン行(存在すれば)
         const groupRows = [row];
         let j = i + 1;
@@ -429,10 +531,26 @@
       // 現在ページ件数 + localStorage保存数を表示
       const currentCount = groupsForSubject.length;
       const totalCount = storedCount;
+      // グループ内の原名を集めて、複数原名が含まれる場合は統合表示を付加
+      const rawNamesSet = new Set();
+      groupsForSubject.forEach(g => {
+        try {
+          const main = g.groupRows.find(r => r.querySelectorAll('td').length >= 3);
+          if (main) {
+            const cs = main.querySelectorAll('td');
+            const rn = (cs[2] && cs[2].textContent.trim()) || '';
+            if (rn) rawNamesSet.add(rn);
+          }
+        } catch (e) {}
+      });
+      const rawNames = Array.from(rawNamesSet).filter(Boolean);
+  const isMerged = rawNames.length > 1;
+  // 自動で "（統合）" を付与しない。表示名はマップで与えられた代表名（subject）をそのまま使う。
+  const displayName = subject;
       if (totalCount > currentCount) {
-        label.textContent = `${subject} (現ページ：${currentCount}件 / 保存${totalCount}件)`;
+        label.textContent = `${displayName} (現ページ：${currentCount}件 / 保存${totalCount}件)`;
       } else {
-        label.textContent = `${subject} (${currentCount}件)`;
+        label.textContent = `${displayName} (${currentCount}件)`;
       }
       label.style.flex = '1';
       label.style.fontSize = '13px';
