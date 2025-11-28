@@ -141,10 +141,25 @@
         console.log('[content.js] tryLoadEmbeddedNameMap: invalid json object');
         return false;
       }
-      const existing = loadNameMap();
-      Object.keys(obj).forEach(k => { existing[k] = Array.isArray(obj[k]) ? obj[k] : []; });
-      saveNameMap(existing);
-      console.log('[content.js] embedded ntut_name_map.json を読み込みました', Object.keys(obj).length, 'entries');
+      // 既存の localStorage マップをバックアップしてから、埋め込みファイルで上書きする
+      try {
+        const previous = loadNameMap();
+        try {
+          const backupKey = NAME_MAP_KEY + '_backup_' + new Date().toISOString();
+          localStorage.setItem(backupKey, JSON.stringify(previous));
+          console.log('[content.js] previous name map backed up to', backupKey);
+        } catch (e) {
+          console.warn('[content.js] name map backup failed', e);
+        }
+      } catch (e) {
+        console.warn('[content.js] failed to read existing name map', e);
+      }
+
+      // 正しい形式に正規化して保存（値が配列でない場合は空配列にする）
+      const normalized = {};
+      Object.keys(obj).forEach(k => { normalized[k] = Array.isArray(obj[k]) ? obj[k] : []; });
+      saveNameMap(normalized);
+      console.log('[content.js] embedded ntut_name_map.json により localStorage を上書きしました', Object.keys(normalized).length, 'entries');
       // 保存後に同じウィンドウで表示を再構築（storage イベントは同一ウィンドウでは発火しないため）
       try {
         if (typeof buildSubjectButtons === 'function') {
